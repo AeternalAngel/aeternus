@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Aeternus
+Comment=Emulador de terminal em Rust
+Exec=aeternus
+Icon=aeternus
+Terminal=false
+Categories=System;TerminalEmulator;
+StartupWMClass=aeternus
