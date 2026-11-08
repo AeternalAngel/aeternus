@@ -16,14 +16,28 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
+#[cfg(unix)]
 use arboard::{Clipboard, GetExtLinux, LinuxClipboardKind, SetExtLinux};
+#[cfg(windows)]
+use arboard::Clipboard;
+
+#[cfg(windows)]
+enum ClipKind {
+    Clipboard,
+    Primary,
+}
+#[cfg(unix)]
+type ClipKind = LinuxClipboardKind;
+
 use winit::application::ApplicationHandler;
 use winit::dpi::{LogicalSize, PhysicalSize};
 use winit::event::{ElementState, KeyEvent, MouseButton, MouseScrollDelta, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop, EventLoopProxy};
 use winit::keyboard::{Key, ModifiersState, NamedKey};
 use winit::window::{CursorIcon, Window, WindowId};
+#[cfg(unix)]
 use winit::platform::wayland::WindowAttributesExtWayland;
+#[cfg(unix)]
 use winit::platform::x11::WindowAttributesExtX11;
 
 use config::Config;
@@ -77,7 +91,9 @@ impl State {
                 cfg.window.width as f64,
                 cfg.window.height as f64,
             ));
+        #[cfg(unix)]
         let attrs = WindowAttributesExtWayland::with_name(attrs, "aeternus", "aeternus");
+        #[cfg(unix)]
         let attrs = WindowAttributesExtX11::with_name(attrs, "aeternus", "aeternus");
         let window = Arc::new(el.create_window(attrs).expect("janela"));
         window.set_cursor(CursorIcon::Text);
@@ -89,16 +105,19 @@ impl State {
         let term = Arc::new(Mutex::new(t));
 
         let shell = if cfg.terminal.shell.trim().is_empty() {
-            std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".into())
+        #[cfg(windows)]
+        let fallback = std::env::var("COMSPEC").unwrap_or_else(|_| "cmd.exe".into());
+        #[cfg(not(windows))]
+        let fallback = std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".into());
+            fallback
         } else {
             cfg.terminal.shell.trim().to_string()
         };
-        let pty = Pty::spawn(&shell, cols as u16, rows as u16).expect("pty");
+        let (pty, mut reader) = Pty::spawn(&shell, cols as u16, rows as u16).expect("pty");
         let dirty = Arc::new(AtomicBool::new(false));
         let want_lock = Arc::new(AtomicBool::new(false));
 
-        let mut reader = pty.master.try_clone().expect("clone do master");
-        let mut writer = pty.master.try_clone().expect("clone do master");
+        let writer = pty.writer.clone();
         let (t, d, wl) = (term.clone(), dirty.clone(), want_lock.clone());
         thread::spawn(move || {
             let mut parser = Parser::new();
@@ -116,7 +135,7 @@ impl State {
                             std::mem::take(&mut term.replies)
                         };
                         if !replies.is_empty() {
-                            let _ = writer.write_all(&replies);
+                            let _ = writer.lock().unwrap().write_all(&replies);
                         }
                         if !d.swap(true, Ordering::AcqRel) {
                             let _ = proxy.send_event(UserEvent::Wakeup);
@@ -154,7 +173,7 @@ impl State {
     }
 
     fn write(&mut self, bytes: &[u8]) {
-        let _ = self.pty.master.write_all(bytes);
+        let _ = self.pty.writer.lock().unwrap().write_all(bytes);
     }
 
     fn reset_blink(&mut self) {
@@ -200,31 +219,41 @@ impl State {
         self.window.request_redraw();
     }
 
-
-    fn copy_selection(&mut self, kind: LinuxClipboardKind) {
+    #[cfg_attr(windows, allow(unused_variables))]
+    fn copy_selection(&mut self, kind: ClipKind) {
         let text = self.term.lock().unwrap().selection_text();
         if let (Some(text), Some(cb)) = (text, self.clipboard.as_mut()) {
             if !text.is_empty() {
+                #[cfg(unix)]
                 let _ = cb.set().clipboard(kind).text(text);
+                #[cfg(windows)]
+                let _ = cb.set_text(text);
             }
         }
     }
-
-    fn paste(&mut self, kind: LinuxClipboardKind) {
-        let text = {
-            let Some(cb) = self.clipboard.as_mut() else { return };
-            match cb.get().clipboard(kind).text() {
-                Ok(t) => t,
-                Err(_) => return,
-            }
-        };
+    
+    #[cfg_attr(windows, allow(unused_variables))]
+    fn paste(&mut self, kind: ClipKind) {
         let bracketed = {
             let mut t = self.term.lock().unwrap();
             t.scroll_to_bottom();
             t.selection_clear();
             t.bracketed_paste
         };
-        let clean = text.replace('\x1b', "");
+        let clean = {
+            let Some(cb) = self.clipboard.as_mut() else { return };
+            #[cfg(unix)]
+            let text = match cb.get().clipboard(kind).text() {
+                Ok(t) => t,
+                Err(_) => return,
+            };
+            #[cfg(windows)]
+            let text = match cb.get_text() {
+                Ok(t) => t,
+                Err(_) => return,
+            };
+            text.replace('\x1b', "")
+        };
         let mut data = Vec::with_capacity(clean.len() + 16);
         if bracketed {
             data.extend_from_slice(b"\x1b[200~");
@@ -251,14 +280,14 @@ impl State {
                         let has_selection =
                             self.term.lock().unwrap().selection_bounds().is_some();
                         if has_selection {
-                            self.copy_selection(LinuxClipboardKind::Clipboard);
+                            self.copy_selection(ClipKind::Clipboard);
                             self.term.lock().unwrap().selection_clear();
                             self.window.request_redraw();
                             return;
                         }
                     }
                     "v" => {
-                        self.paste(LinuxClipboardKind::Clipboard);
+                        self.paste(ClipKind::Clipboard);
                         return;
                     }
                     _ => {}
@@ -270,11 +299,11 @@ impl State {
             if let Key::Character(c) = &event.logical_key {
                 match c.as_str().to_lowercase().as_str() {
                     "c" => {
-                        self.copy_selection(LinuxClipboardKind::Clipboard);
+                        self.copy_selection(ClipKind::Clipboard);
                         return;
                     }
                     "v" => {
-                        self.paste(LinuxClipboardKind::Clipboard);
+                        self.paste(ClipKind::Clipboard);
                         return;
                     }
                     "r" => {
@@ -298,7 +327,7 @@ impl State {
             }
         }
         if mods.shift_key() && event.logical_key == Key::Named(NamedKey::Insert) {
-            self.paste(LinuxClipboardKind::Primary);
+            self.paste(ClipKind::Primary);
             return;
         }
 
@@ -391,11 +420,11 @@ impl State {
                     has
                 };
                 if has {
-                    self.copy_selection(LinuxClipboardKind::Primary);
+                    self.copy_selection(ClipKind::Primary);
                 }
                 self.window.request_redraw();
             }
-            (MouseButton::Middle, true) => self.paste(LinuxClipboardKind::Primary),
+            (MouseButton::Middle, true) => self.paste(ClipKind::Primary),
             _ => {}
         }
     }
