@@ -1,42 +1,42 @@
-use nix::libc;
-use nix::pty::{openpty, Winsize};
-use std::fs::File;
+use portable_pty::{native_pty_system, Child, CommandBuilder, MasterPty, PtySize};
 use std::io;
-use std::os::fd::AsRawFd;
-use std::os::unix::process::CommandExt;
-use std::process::{Child, Command, Stdio};
+use std::sync::{Arc, Mutex};
 
 pub struct Pty {
-    pub master: File,
-    pub child: Child,
+    pub reader: Box<dyn io::Read + Send>,
+    pub writer: Arc<Mutex<Box<dyn io::Write + Send>>>,
+    pub child: Box<dyn Child + Send + Sync>,
+    master: Box<dyn MasterPty + Send>,
 }
 
 impl Pty {
     pub fn spawn(shell: &str, cols: u16, rows: u16) -> io::Result<Self> {
-        let ws = Winsize { ws_row: rows, ws_col: cols, ws_xpixel: 0, ws_ypixel: 0 };
-        let pty = openpty(Some(&ws), None).map_err(io::Error::from)?;
+        let size = PtySize { rows, cols, pixel_width: 0, pixel_height: 0 };
+        let pty = native_pty_system().openpty(size).map_err(io::Error::other)?;
 
-        let mut cmd = Command::new(shell);
-        cmd.env("TERM", "xterm-256color")
-            .env("COLORTERM", "truecolor")
-            .stdin(Stdio::from(pty.slave.try_clone()?))
-            .stdout(Stdio::from(pty.slave.try_clone()?))
-            .stderr(Stdio::from(pty.slave));
+        let mut cmd = CommandBuilder::new(shell);
+        cmd.env("TERM", "xterm-256color");
+        cmd.env("COLORTERM", "truecolor");
 
-        unsafe {
-            cmd.pre_exec(|| {
-                libc::setsid();
-                libc::ioctl(0, libc::TIOCSCTTY as _, 0);
-                Ok(())
-            });
-        }
+        let child = pty.slave.spawn_command(cmd).map_err(io::Error::other)?;
+        let reader = pty.master.try_clone_reader().map_err(io::Error::other)?;
+        let writer = pty.master.take_writer().map_err(io::Error::other)?;
+        drop(pty.slave);
 
-        let child = cmd.spawn()?;
-        Ok(Self { master: File::from(pty.master), child })
+        Ok(Self {
+            reader,
+            writer: Arc::new(Mutex::new(writer)),
+            child,
+            master: pty.master,
+        })
     }
 
     pub fn resize(&self, cols: u16, rows: u16) {
-        let ws = libc::winsize { ws_row: rows, ws_col: cols, ws_xpixel: 0, ws_ypixel: 0 };
-        unsafe { libc::ioctl(self.master.as_raw_fd(), libc::TIOCSWINSZ as _, &ws) };
+        let _ = self.master.resize(PtySize {
+            rows,
+            cols,
+            pixel_width: 0,
+            pixel_height: 0,
+        });
     }
 }
