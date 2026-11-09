@@ -22,8 +22,9 @@ const TEMPLATE: &str = r##"# aeternus: configuração
 # padding = 8           # margem interna, em pixels lógicos
 
 [terminal]
-# shell = ""            # vazio = usa $SHELL; só vale ao abrir
+# shell = ""            # vazio = usa $SHELL; só vale ao abrir; aceita argumentos, ex. "bash -l"
 # scrollback = 10000    # linhas de histórico
+# working_directory = ""  # vazio = diretório atual; só vale ao abrir
 
 [cursor]
 # shape = "block"       # block, underline ou bar
@@ -71,11 +72,12 @@ impl Default for WindowConfig {
 pub struct TerminalConfig {
     pub shell: String,
     pub scrollback: usize,
+    pub working_directory: String,
 }
 
 impl Default for TerminalConfig {
     fn default() -> Self {
-        Self { shell: String::new(), scrollback: 10_000 }
+        Self { shell: String::new(), scrollback: 10_000, working_directory: String::new() }
     }
 }
 
@@ -180,6 +182,13 @@ impl Config {
     }
 }
 
+#[cfg(windows)]
+pub fn config_path() -> Option<PathBuf> {
+    let base = PathBuf::from(std::env::var_os("APPDATA")?);
+    Some(base.join("aeternus").join("config.toml"))
+}
+
+#[cfg(not(windows))]
 pub fn config_path() -> Option<PathBuf> {
     let base = match std::env::var_os("XDG_CONFIG_HOME") {
         Some(v) if !v.is_empty() => PathBuf::from(v),

@@ -157,6 +157,7 @@ pub struct Renderer {
     pub cell_h: f32,
     bg_inst: Vec<Instance>,
     fg_inst: Vec<Instance>,
+    effective_bg: [u8; 3],
 }
 
 impl Renderer {
@@ -319,6 +320,7 @@ impl Renderer {
             cell_h,
             bg_inst: Vec::new(),
             fg_inst: Vec::new(),
+            effective_bg: cfg.palette.bg,
         }
     }
 
@@ -351,9 +353,7 @@ impl Renderer {
         )
         .round()
         .max(1.0);
-        self.glyphs.clear();
-        self.ascii.fill(None);
-        self.atlas.reset();
+        self.reset_atlas();
     }
 
     /// Muda o zoom da fonte; o chamador precisa refazer o layout da grade depois.
@@ -420,6 +420,12 @@ impl Renderer {
         g
     }
 
+    fn reset_atlas(&mut self) {
+        self.atlas.reset();
+        self.glyphs.clear();
+        self.ascii.fill(None);
+    }
+
     fn rasterize(&mut self, ch: char, bold: bool, italic: bool) -> Option<GlyphInfo> {
         let family = self.font_family.clone();
         let attrs = Attrs::new()
@@ -446,7 +452,13 @@ impl Renderer {
             _ => return None,
         };
 
-        let (ax, ay) = self.atlas.alloc(p.width, p.height)?;
+        let (ax, ay) = match self.atlas.alloc(p.width, p.height) {
+            Some(pos) => pos,
+            None => {
+                self.reset_atlas();
+                self.atlas.alloc(p.width, p.height)?
+            }
+        };
         self.atlas.write(&self.queue, ax, ay, p.width, p.height, &alpha);
 
         let a = ATLAS_SIZE as f32;
@@ -466,7 +478,22 @@ impl Renderer {
         bgs.clear();
         fgs.clear();
 
-        let pal = self.palette.clone();
+        let mut pal = self.palette.clone();
+        if let Some(c) = term.fg_override {
+            pal.fg = c;
+        }
+        if let Some(c) = term.bg_override {
+            pal.bg = c;
+        }
+        if let Some(c) = term.cursor_override {
+            pal.cursor = c;
+        }
+        for (&i, &c) in &term.ansi_override {
+            if (i as usize) < pal.ansi.len() {
+                pal.ansi[i as usize] = c;
+            }
+        }
+        self.effective_bg = pal.bg;
         let (cw, ch, pad) = (self.cell_w, self.cell_h, self.pad);
         let thick = self.scale.round().max(1.0);
         let cols = term.cols();
@@ -583,7 +610,7 @@ impl Renderer {
         self.queue.write_buffer(&self.inst_buf, 0, bytemuck::cast_slice(&self.bg_inst));
         self.queue.write_buffer(&self.inst_buf, n_bg as u64 * isz, bytemuck::cast_slice(&self.fg_inst));
 
-        let bg = self.palette.bg;
+        let bg = self.effective_bg;
         let clear = wgpu::Color {
             r: bg[0] as f64 / 255.0,
             g: bg[1] as f64 / 255.0,
