@@ -1,4 +1,5 @@
 #![allow(dead_code)]
+#![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
 
 mod bench;
 mod cell;
@@ -113,7 +114,9 @@ impl State {
         } else {
             cfg.terminal.shell.trim().to_string()
         };
-        let (pty, mut reader) = Pty::spawn(&shell, cols as u16, rows as u16).expect("pty");
+        let (pty, mut reader) =
+            Pty::spawn(&shell, &cfg.terminal.working_directory, cols as u16, rows as u16)
+                .expect("pty");
         let dirty = Arc::new(AtomicBool::new(false));
         let want_lock = Arc::new(AtomicBool::new(false));
 
@@ -232,6 +235,21 @@ impl State {
         }
     }
     
+    #[cfg_attr(windows, allow(unused_variables))]
+    fn osc52_copy(&mut self, kind: u8, text: String) {
+        if text.is_empty() {
+            return;
+        }
+        let Some(cb) = self.clipboard.as_mut() else { return };
+        #[cfg(unix)]
+        {
+            let target = if kind == b'p' { LinuxClipboardKind::Primary } else { LinuxClipboardKind::Clipboard };
+            let _ = cb.set().clipboard(target).text(text);
+        }
+        #[cfg(windows)]
+        let _ = cb.set_text(text);
+    }
+
     #[cfg_attr(windows, allow(unused_variables))]
     fn paste(&mut self, kind: ClipKind) {
         let bracketed = {
@@ -419,6 +437,7 @@ impl State {
                     }
                     has
                 };
+                #[cfg(not(windows))]
                 if has {
                     self.copy_selection(ClipKind::Primary);
                 }
@@ -553,14 +572,14 @@ impl ApplicationHandler<UserEvent> for App {
         }
     }
 
-    fn user_event(&mut self, el: &ActiveEventLoop, ev: UserEvent) {
+    fn user_event(&mut self, _el: &ActiveEventLoop, ev: UserEvent) {
         match ev {
             UserEvent::Wakeup => {
                 if let Some(s) = &self.state {
                     s.window.request_redraw();
                 }
             }
-            UserEvent::Exit => el.exit(),
+            UserEvent::Exit => std::process::exit(0),
         }
     }
 
@@ -590,12 +609,12 @@ impl ApplicationHandler<UserEvent> for App {
         }
     }
 
-    fn window_event(&mut self, el: &ActiveEventLoop, _id: WindowId, event: WindowEvent) {
+    fn window_event(&mut self, _el: &ActiveEventLoop, _id: WindowId, event: WindowEvent) {
         let Some(s) = self.state.as_mut() else { return };
         match event {
             WindowEvent::CloseRequested => {
                 let _ = s.pty.child.kill();
-                el.exit();
+                std::process::exit(0);
             }
             WindowEvent::Resized(size) => s.resize(size),
             WindowEvent::ModifiersChanged(m) => self.mods = m.state(),
@@ -611,17 +630,29 @@ impl ApplicationHandler<UserEvent> for App {
             WindowEvent::RedrawRequested => {
                 s.dirty.store(false, Ordering::Release);
                 s.want_lock.store(true, Ordering::Relaxed);
+                let mut skip_draw = false;
+                let clip;
                 {
-                    let t = s.term.lock().unwrap();
+                    let mut t = s.term.lock().unwrap();
                     s.want_lock.store(false, Ordering::Relaxed);
                     if !t.title.is_empty() && t.title != s.last_title {
                         s.window.set_title(&t.title);
                         s.last_title = t.title.clone();
                     }
-                    let view = View { focused: s.focused, blink_on: s.blink_on };
-                    s.renderer.build(&t, &view);
+                    clip = t.clipboard_write.take();
+                    if t.sync_output {
+                        skip_draw = true;
+                    } else {
+                        let view = View { focused: s.focused, blink_on: s.blink_on };
+                        s.renderer.build(&t, &view);
+                    }
                 }
-                s.renderer.draw();
+                if let Some((kind, text)) = clip {
+                    s.osc52_copy(kind, text);
+                }
+                if !skip_draw {
+                    s.renderer.draw();
+                }
             }
             _ => {}
         }
@@ -691,6 +722,15 @@ fn key_bytes(ev: &KeyEvent, mods: ModifiersState, app_cursor: bool) -> Option<Ve
             vec![0x1b, b'O', c]
         }
     };
+
+    let alt_only = mods.alt_key() && !mods.shift_key() && !mods.control_key() && !mods.super_key();
+    if alt_only {
+        match &ev.logical_key {
+            Key::Named(NamedKey::ArrowLeft) => return Some(vec![0x1b, b'b']),
+            Key::Named(NamedKey::ArrowRight) => return Some(vec![0x1b, b'f']),
+            _ => {}
+        }
+    }
 
     if let Key::Named(n) = &ev.logical_key {
         let special = match n {

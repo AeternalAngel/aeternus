@@ -9,11 +9,22 @@ pub struct Pty {
 }
 
 impl Pty {
-    pub fn spawn(shell: &str, cols: u16, rows: u16) -> io::Result<(Self, Box<dyn io::Read + Send>)> {
+    pub fn spawn(
+        shell: &str,
+        working_directory: &str,
+        cols: u16,
+        rows: u16,
+    ) -> io::Result<(Self, Box<dyn io::Read + Send>)> {
         let size = PtySize { rows, cols, pixel_width: 0, pixel_height: 0 };
         let pty = native_pty_system().openpty(size).map_err(io::Error::other)?;
 
-        let mut cmd = CommandBuilder::new(shell);
+        let mut parts = shell.split_whitespace();
+        let program = parts.next().unwrap_or(shell);
+        let mut cmd = CommandBuilder::new(program);
+        cmd.args(parts);
+        if !working_directory.trim().is_empty() {
+            cmd.cwd(working_directory.trim());
+        }
         cmd.env("TERM", "xterm-256color");
         cmd.env("COLORTERM", "truecolor");
 

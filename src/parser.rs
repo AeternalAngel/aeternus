@@ -1,7 +1,7 @@
 pub trait Perform {
     fn print(&mut self, c: char);
     fn execute(&mut self, byte: u8);
-    fn csi(&mut self, params: &[u16], inter: &[u8], private: Option<u8>, action: u8);
+    fn csi(&mut self, params: &[u16], subs: &[bool], inter: &[u8], private: Option<u8>, action: u8);
     fn esc(&mut self, inter: &[u8], byte: u8);
     fn osc(&mut self, data: &[u8]);
     /// Trecho contínuo de ASCII imprimível (0x20..=0x7E). Implementações
@@ -25,6 +25,8 @@ enum State {
 pub struct Parser {
     state: State,
     params: Vec<u16>,
+    subs: Vec<bool>,
+    pending_colon: bool,
     cur: u32,
     started: bool,
     inter: Vec<u8>,
@@ -40,6 +42,8 @@ impl Parser {
         Self {
             state: State::Ground,
             params: Vec::with_capacity(32),
+            subs: Vec::with_capacity(32),
+            pending_colon: false,
             cur: 0,
             started: false,
             inter: Vec::with_capacity(4),
@@ -126,6 +130,8 @@ impl Parser {
             0x20..=0x2F => self.inter.push(b),
             b'[' if self.inter.is_empty() => {
                 self.params.clear();
+                self.subs.clear();
+                self.pending_colon = false;
                 self.cur = 0;
                 self.started = false;
                 self.inter.clear();
@@ -148,6 +154,7 @@ impl Parser {
     fn push_param(&mut self) {
         if self.params.len() < 32 {
             self.params.push(self.cur as u16);
+            self.subs.push(self.pending_colon);
         }
         self.cur = 0;
     }
@@ -160,6 +167,7 @@ impl Parser {
             }
             b';' | b':' => {
                 self.push_param();
+                self.pending_colon = b == b':';
                 self.started = true;
             }
             0x3C..=0x3F => {
@@ -176,7 +184,7 @@ impl Parser {
                 if self.started {
                     self.push_param();
                 }
-                p.csi(&self.params, &self.inter, self.private, b);
+                p.csi(&self.params, &self.subs, &self.inter, self.private, b);
                 self.state = State::Ground;
             }
             0x1B => self.enter_escape(),
