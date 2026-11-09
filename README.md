@@ -6,7 +6,7 @@ A GPU-accelerated terminal emulator written in Rust (winit + wgpu) for Linux and
 
 ![Aeternus screenshot](docs/screenshot.png)
 
-> **Status:** version 1.1, now with Windows support. Expect bugs and missing features.
+> **Status:** version 1.2. Expect bugs and missing features. See [CHANGELOG](CHANGELOG.md).
 
 ## Install
 
@@ -15,7 +15,7 @@ Download the binary for your platform from [Releases](https://github.com/Aeterna
 ### Linux (x86_64)
 
 ```bash
-tar xzf aeternus-1.1-linux-x86_64.tar.gz
+tar xzf aeternus-1.2-linux-x86_64.tar.gz
 ./aeternus
 ```
 
@@ -23,7 +23,7 @@ Requires a Vulkan-capable GPU driver and Wayland or X11. The binary needs glibc 
 
 ### Windows (x86_64)
 
-Extract `aeternus-1.1-windows-x86_64.zip` and run `aeternus.exe`. Requires Windows 10 or newer and a GPU driver with Vulkan or DirectX 12 support.
+Extract `aeternus-1.2-windows-x86_64.zip` and run `aeternus.exe`. Requires Windows 10 or newer and a GPU driver with Vulkan or DirectX 12 support.
 
 The default shell is `cmd.exe` (changeable in `config.toml`). The default font is a Nerd Font; if it isn't installed, a system font is used as fallback. Installing the font (or editing `font.family` in the config) gives better results.
 
@@ -41,9 +41,9 @@ The binary will be at `target/release/aeternus` (Linux) or `target/release/aeter
 
 - **Rendering:** wgpu with a glyph atlas and a single draw call; vsync on.
 - **Fonts:** cosmic-text with automatic fallback (Nerd Font by default), plus wide characters and color emoji.
-- **Compatibility:** 16/256/truecolor, alternate screen, bracketed paste, mouse reporting (1000/1002/1003/SGR), DECSCUSR cursor shapes, OSC title/focus/52.
+- **Compatibility:** 16/256/truecolor (including SGR sub-parameters, e.g. `38:2::r:g:b`), alternate screen, bracketed paste, mouse reporting (1000/1002/1003/SGR), DECSCUSR cursor shapes, synchronized output (DEC 2026), DECRQM, XTVERSION, OSC title/focus, OSC 4/10/11/12 (color set/reset) and OSC 52 (clipboard).
 - **Daily use:** 10k-line scrollback, word/line selection, system and primary clipboard, font zoom (Ctrl+wheel).
-- **Config:** generated on first run and hot-reloaded on save (or Ctrl+Shift+R). Errors show in a banner and the previous config is kept.
+- **Config:** generated on first run and hot-reloaded on save (or Ctrl+Shift+R). Errors show in a banner and the previous config is kept. `terminal.shell` accepts arguments (e.g. `"bash -l"`) and `terminal.working_directory` sets the starting directory.
   - Linux: `~/.config/aeternus/config.toml`
   - Windows: `%APPDATA%\aeternus\config.toml`
 
