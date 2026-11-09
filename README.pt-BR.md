@@ -6,7 +6,7 @@ Emulador de terminal acelerado por GPU, escrito em Rust (winit + wgpu), para Lin
 
 ![Captura de tela do Aeternus](docs/screenshot.png)
 
-> **Status:** versão 1.1, agora com suporte ao Windows. Espere bugs e funcionalidades faltando.
+> **Status:** versão 1.2. Espere bugs e funcionalidades faltando. Veja o [CHANGELOG](CHANGELOG.md).
 
 ## Instalação
 
@@ -15,7 +15,7 @@ Baixe o binário da sua plataforma em [Releases](https://github.com/AeternalAnge
 ### Linux (x86_64)
 
 ```bash
-tar xzf aeternus-1.1-linux-x86_64.tar.gz
+tar xzf aeternus-1.2-linux-x86_64.tar.gz
 ./aeternus
 ```
 
@@ -23,7 +23,7 @@ Requer driver de GPU com Vulkan e Wayland ou X11. O binário precisa de glibc 2.
 
 ### Windows (x86_64)
 
-Extraia o `aeternus-1.1-windows-x86_64.zip` e execute o `aeternus.exe`. Requer Windows 10 ou mais novo e um driver de GPU com suporte a Vulkan ou DirectX 12.
+Extraia o `aeternus-1.2-windows-x86_64.zip` e execute o `aeternus.exe`. Requer Windows 10 ou mais novo e um driver de GPU com suporte a Vulkan ou DirectX 12.
 
 O shell padrão é o `cmd.exe` (mudável no `config.toml`). A fonte padrão é uma Nerd Font; se ela não estiver instalada, o renderizador usa uma fonte do sistema como fallback. Instalar a fonte (ou editar `font.family` na configuração) melhora o resultado.
 
@@ -41,9 +41,9 @@ O binário estará em `target/release/aeternus` (Linux) ou `target/release/aeter
 
 - **Renderização:** wgpu com atlas de glifos e uma única chamada de desenho; vsync ligado.
 - **Fontes:** cosmic-text com fallback automático (Nerd Font por padrão), além de caracteres largos e emoji coloridos.
-- **Compatibilidade:** 16/256/truecolor, tela alternativa, bracketed paste, mouse reporting (1000/1002/1003/SGR), formatos de cursor via DECSCUSR, OSC de título/foco/52.
+- **Compatibilidade:** 16/256/truecolor (incluindo subparâmetros de SGR, ex. `38:2::r:g:b`), tela alternativa, bracketed paste, mouse reporting (1000/1002/1003/SGR), formatos de cursor via DECSCUSR, saída sincronizada (DEC 2026), DECRQM, XTVERSION, OSC de título/foco, OSC 4/10/11/12 (definição/reset de cor) e OSC 52 (clipboard).
 - **Uso diário:** scrollback de 10 mil linhas, seleção por palavra/linha, clipboard do sistema e seleção primária, zoom da fonte (Ctrl+roda).
-- **Config:** gerada na primeira execução e recarregada ao salvar (ou Ctrl+Shift+R). Erros aparecem numa faixa e a config anterior é mantida.
+- **Config:** gerada na primeira execução e recarregada ao salvar (ou Ctrl+Shift+R). Erros aparecem numa faixa e a config anterior é mantida. `terminal.shell` aceita argumentos (ex. `"bash -l"`) e `terminal.working_directory` define o diretório inicial.
   - Linux: `~/.config/aeternus/config.toml`
   - Windows: `%APPDATA%\aeternus\config.toml`
 
