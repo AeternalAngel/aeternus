@@ -19,7 +19,7 @@ tar xzf aeternus-1.2.1-linux-x86_64.tar.gz
 ./aeternus
 ```
 
-Requires a Vulkan-capable GPU driver and Wayland or X11. The binary needs glibc 2.36 or newer (e.g. Debian 12, Ubuntu 23.04, Fedora 37 or later); on older distros, build from source.
+Requires a Vulkan-capable GPU driver and Wayland or X11. The binary needs glibc 2.35 or newer (e.g. Debian 12, Ubuntu 23.04, Fedora 37 or later); on older distros, build from source.
 
 ### Windows (x86_64)
 
