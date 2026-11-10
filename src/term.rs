@@ -1,4 +1,5 @@
 use std::collections::VecDeque;
+use std::time::{Duration, Instant};
 
 use serde::Deserialize;
 
@@ -9,6 +10,10 @@ use crate::grid::Grid;
 use crate::parser::Perform;
 
 const SCROLLBACK_LINES: usize = 10_000;
+
+pub const SYNC_TIMEOUT: Duration = Duration::from_millis(150);
+
+const OSC52_MAX_BYTES: usize = 1 << 20;
 
 /// Flag na última célula de uma linha que continua na seguinte por quebra
 /// automática. Serve para copiar texto sem inserir '\n' falsos.
@@ -94,6 +99,7 @@ pub struct Term {
     pub cursor_shape: CursorShape,
     pub cursor_blink: bool,
     pub app_cursor_keys: bool,
+    pub app_keypad: bool,
     pub bracketed_paste: bool,
     pub mouse_mode: MouseMode,
     pub mouse_sgr: bool,
@@ -101,11 +107,13 @@ pub struct Term {
     pub alt_scroll: bool,
     pub title: String,
     pub sync_output: bool,
+    pub sync_since: Option<Instant>,
     pub fg_override: Option<[u8; 3]>,
     pub bg_override: Option<[u8; 3]>,
     pub cursor_override: Option<[u8; 3]>,
     pub ansi_override: std::collections::HashMap<u8, [u8; 3]>,
     pub clipboard_write: Option<(u8, String)>,
+    pub osc52: bool,
 }
 
 impl Term {
@@ -134,6 +142,7 @@ impl Term {
             cursor_shape: CursorShape::Block,
             cursor_blink: true,
             app_cursor_keys: false,
+            app_keypad: false,
             bracketed_paste: false,
             mouse_mode: MouseMode::Off,
             mouse_sgr: false,
@@ -141,11 +150,13 @@ impl Term {
             alt_scroll: true,
             title: String::new(),
             sync_output: false,
+            sync_since: None,
             fg_override: None,
             bg_override: None,
             cursor_override: None,
             ansi_override: std::collections::HashMap::new(),
             clipboard_write: None,
+            osc52: true,
         }
     }
 
@@ -156,6 +167,7 @@ impl Term {
         self.default_bg = cfg.palette.bg;
         self.max_scrollback = cfg.terminal.scrollback;
         self.trim_scrollback();
+        self.osc52 = cfg.terminal.osc52;
         self.default_cursor_shape = cfg.cursor.shape;
         self.default_cursor_blink = cfg.cursor.blink;
         self.cursor_shape = cfg.cursor.shape;
@@ -200,6 +212,25 @@ impl Term {
         let changed = new != self.display_offset;
         self.display_offset = new;
         changed
+    }
+
+    pub fn sync_deadline(&self) -> Option<Instant> {
+        if self.sync_output {
+            self.sync_since.map(|t| t + SYNC_TIMEOUT)
+        } else {
+            None
+        }
+    }
+
+    pub fn expire_sync(&mut self, now: Instant) -> bool {
+        match self.sync_deadline() {
+            Some(d) if now >= d => {
+                self.sync_output = false;
+                self.sync_since = None;
+                true
+            }
+            _ => false,
+        }
     }
 
     pub fn scroll_to_bottom(&mut self) -> bool {
@@ -368,6 +399,10 @@ impl Term {
                 *g = g.resized(cols, rows);
             }
         }
+        fix_wide_pairs(&mut self.grid);
+        if let Some(g) = &mut self.main_grid {
+            fix_wide_pairs(g);
+        }
         self.scroll_top = 0;
         self.scroll_bottom = rows - 1;
         self.move_to(self.cursor.row, self.cursor.col);
@@ -399,6 +434,18 @@ impl Term {
 
     fn blank(&self) -> Cell {
         Cell { bg: self.pen.bg, ..Cell::BLANK }
+    }
+
+    fn clear_wide_edges(&mut self, r: usize, from: usize, to: usize) {
+        let b = self.blank();
+        let cols = self.cols();
+        let row = self.grid.row_mut(r);
+        if from > 0 && from < cols && row[from].flags & WIDE_SPACER != 0 {
+            row[from - 1] = b;
+        }
+        if to > 0 && to < cols && row[to].flags & WIDE_SPACER != 0 {
+            row[to] = b;
+        }
     }
 
     fn reply(&mut self, s: &str) {
@@ -482,7 +529,9 @@ impl Term {
         let (fg, bg) = (self.default_fg, self.default_bg);
         let (shape, blink) = (self.default_cursor_shape, self.default_cursor_blink);
         let max_sb = self.max_scrollback;
+        let osc52 = self.osc52;
         *self = Term::new(c, r);
+        self.osc52 = osc52;
         self.title = title;
         self.replies = replies;
         self.default_fg = fg;
@@ -562,6 +611,14 @@ impl Term {
         let (r, c, cols) = (self.cursor.row, self.cursor.col, self.cols());
         let n = n.min(cols - c);
         let row = self.grid.row_mut(r);
+        if c > 0 && row[c].flags & WIDE_SPACER != 0 {
+            row[c - 1] = b;
+            row[c] = b;
+        }
+        let k = cols - n;
+        if k > c && k < cols && row[k].flags & WIDE_SPACER != 0 {
+            row[k - 1] = b;
+        }
         row.copy_within(c..cols - n, c + n);
         row[c..c + n].fill(b);
     }
@@ -570,6 +627,7 @@ impl Term {
         let b = self.blank();
         let (r, c, cols) = (self.cursor.row, self.cursor.col, self.cols());
         let n = n.min(cols - c);
+        self.clear_wide_edges(r, c, c + n);
         let row = self.grid.row_mut(r);
         row.copy_within(c + n..cols, c);
         row[cols - n..].fill(b);
@@ -578,7 +636,9 @@ impl Term {
     fn erase_chars(&mut self, n: usize) {
         let b = self.blank();
         let (r, c, cols) = (self.cursor.row, self.cursor.col, self.cols());
-        self.grid.fill(r, c, (c + n).min(cols), b);
+        let end = (c + n).min(cols);
+        self.clear_wide_edges(r, c, end);
+        self.grid.fill(r, c, end, b);
     }
 
     fn set_alt_screen(&mut self, on: bool, save: bool) {
@@ -623,7 +683,14 @@ impl Term {
                 1007 => self.alt_scroll = on,
                 1049 => self.set_alt_screen(on, true),
                 2004 => self.bracketed_paste = on,
-                2026 => self.sync_output = on,
+                2026 => {
+                    if on && !self.sync_output {
+                        self.sync_since = Some(Instant::now());
+                    } else if !on {
+                        self.sync_since = None;
+                    }
+                    self.sync_output = on;
+                }
                 _ => {}
             }
         }
@@ -719,6 +786,26 @@ impl Term {
                 _ => {}
             }
             i += 1;
+        }
+    }
+}
+
+fn is_wide(c: char) -> bool {
+    unicode_width::UnicodeWidthChar::width(c) == Some(2)
+}
+
+fn fix_wide_pairs(g: &mut Grid) {
+    let cols = g.cols();
+    for r in 0..g.rows() {
+        let row = g.row_mut(r);
+        for c in 0..cols {
+            if row[c].flags & WIDE_SPACER != 0 {
+                if c == 0 || !is_wide(row[c - 1].ch) || row[c - 1].flags & WIDE_SPACER != 0 {
+                    row[c] = Cell { flags: row[c].flags & !WIDE_SPACER, ..row[c] };
+                }
+            } else if is_wide(row[c].ch) && (c + 1 >= cols || row[c + 1].flags & WIDE_SPACER == 0) {
+                row[c] = Cell { ch: ' ', ..row[c] };
+            }
         }
     }
 }
@@ -837,6 +924,8 @@ impl Perform for Term {
                 self.cursor.col = cols - 1;
             }
         }
+        let col = self.cursor.col;
+        self.clear_wide_edges(self.cursor.row, col, (col + w).min(cols));
         let cell = Cell { ch: c, fg: self.pen.fg, bg: self.pen.bg, flags: self.pen.flags };
         self.grid.row_mut(self.cursor.row)[self.cursor.col] = cell;
         if w == 2 && self.cursor.col + 1 < cols {
@@ -868,6 +957,7 @@ impl Perform for Term {
             }
             let col = self.cursor.col;
             let n = s.len().min(cols - col);
+            self.clear_wide_edges(self.cursor.row, col, col + n);
             let (fg, bg, fl) = (self.pen.fg, self.pen.bg, self.pen.flags);
             let row = self.grid.row_mut(self.cursor.row);
             for (cell, &b) in row[col..col + n].iter_mut().zip(&s[..n]) {
@@ -928,7 +1018,9 @@ impl Perform for Term {
             (Some(b'?'), b'h') => self.set_modes(params, true),
             (Some(b'?'), b'l') => self.set_modes(params, false),
             (Some(b'>'), b'c') if first == 0 => self.reply("\x1b[>0;0;0c"), // Secondary DA
-            (Some(b'>'), b'q') => self.reply("\x1bP>|aeternus 1.1\x1b\\"),
+            (Some(b'>'), b'q') => {
+                self.reply(concat!("\x1bP>|aeternus ", env!("CARGO_PKG_VERSION"), "\x1b\\"))
+            }
             (Some(_), _) => {}
             (None, b'A') => self.move_to(row.saturating_sub(p(0, 1)), col),
             (None, b'B') => self.move_to(row + p(0, 1), col),
@@ -995,6 +1087,8 @@ impl Perform for Term {
                 self.linefeed();
             }
             b'M' => self.reverse_index(),
+            b'=' => self.app_keypad = true,
+            b'>' => self.app_keypad = false,
             b'Z' => self.reply("\x1b[?62;c"), // DECID
             b'c' => self.reset(),
             _ => {}
@@ -1059,13 +1153,14 @@ impl Perform for Term {
             b"110" => self.fg_override = None,
             b"111" => self.bg_override = None,
             b"112" => self.cursor_override = None,
-            b"52" => {
+            b"52" if self.osc52 => {
                 let mut it = rest.splitn(2, |&b| b == b';');
                 let sel = it.next().unwrap_or(&[]);
                 let payload = it.next().unwrap_or(&[]);
                 if payload != b"?" && payload != b"!" {
-                    if let Some(text) =
-                        base64_decode(payload).and_then(|b| String::from_utf8(b).ok())
+                    if let Some(text) = base64_decode(payload)
+                        .filter(|b| b.len() <= OSC52_MAX_BYTES)
+                        .and_then(|b| String::from_utf8(b).ok())
                     {
                         let kind = sel.first().copied().unwrap_or(b'c');
                         self.clipboard_write = Some((kind, text));
@@ -1245,11 +1340,134 @@ mod tests {
     }
 
     #[test]
+    fn keypad_application_mode() {
+        let mut t = Term::new(5, 1);
+        feed(&mut t, "\x1b=");
+        assert!(t.app_keypad);
+        feed(&mut t, "\x1b>");
+        assert!(!t.app_keypad);
+    }
+
+    #[test]
     fn combining_char_does_not_advance_cursor() {
         let mut t = Term::new(10, 1);
         feed(&mut t, "e");
         let col_after_e = t.cursor.col;
         feed(&mut t, "\u{0301}");
         assert_eq!(t.cursor.col, col_after_e);
+    }
+
+    fn assert_no_half_pairs(t: &Term) {
+        for r in 0..t.rows() {
+            let row = t.grid.row(r);
+            for c in 0..row.len() {
+                if row[c].flags & WIDE_SPACER != 0 {
+                    assert!(c > 0 && is_wide(row[c - 1].ch), "spacer órfão em {r},{c}: {}", t.dump());
+                }
+                if is_wide(row[c].ch) {
+                    assert!(
+                        c + 1 < row.len() && row[c + 1].flags & WIDE_SPACER != 0,
+                        "metade larga sem par em {r},{c}: {}",
+                        t.dump()
+                    );
+                }
+            }
+        }
+    }
+
+    fn row_text(t: &Term, r: usize) -> String {
+        t.grid.row(r).iter().map(|c| c.ch).collect()
+    }
+
+    #[test]
+    fn wide_overwrite_lead_clears_spacer() {
+        let mut t = Term::new(6, 1);
+        feed(&mut t, "你好\x1b[1Gx");
+        assert_eq!(row_text(&t, 0), "x 好   ");
+        assert_eq!(t.grid.row(0)[1].flags & WIDE_SPACER, 0);
+        assert_no_half_pairs(&t);
+    }
+
+    #[test]
+    fn wide_overwrite_spacer_with_ascii_clears_lead() {
+        let mut t = Term::new(6, 1);
+        feed(&mut t, "你好\x1b[2Gx");
+        assert_eq!(row_text(&t, 0), " x好   ");
+        assert_no_half_pairs(&t);
+    }
+
+    #[test]
+    fn wide_overwrite_spacer_with_print_clears_lead() {
+        let mut t = Term::new(6, 1);
+        feed(&mut t, "你好\x1b[2Gé");
+        assert_eq!(row_text(&t, 0), " é好   ");
+        assert_no_half_pairs(&t);
+    }
+
+    #[test]
+    fn wide_over_offset_wide() {
+        let mut t = Term::new(6, 1);
+        feed(&mut t, "你好\x1b[2G世");
+        assert_eq!(t.grid.row(0)[0].ch, ' ');
+        assert_eq!(t.grid.row(0)[1].ch, '世');
+        assert_eq!(t.grid.row(0)[3].flags & WIDE_SPACER, 0);
+        assert_no_half_pairs(&t);
+    }
+
+    #[test]
+    fn wide_erase_chars_on_spacer() {
+        let mut t = Term::new(6, 1);
+        feed(&mut t, "你好\x1b[2G\x1b[1X");
+        assert_eq!(row_text(&t, 0), "  好   ");
+        assert_no_half_pairs(&t);
+
+        let mut t = Term::new(6, 1);
+        feed(&mut t, "你好\x1b[1G\x1b[3X");
+        assert_eq!(row_text(&t, 0), "      ");
+        assert_no_half_pairs(&t);
+    }
+
+    #[test]
+    fn wide_insert_chars_on_spacer() {
+        let mut t = Term::new(6, 1);
+        feed(&mut t, "你ab\x1b[2G\x1b[1@");
+        assert_eq!(row_text(&t, 0), "   ab ");
+        assert_no_half_pairs(&t);
+    }
+
+    #[test]
+    fn wide_insert_chars_pushes_pair_off_edge() {
+        let mut t = Term::new(6, 1);
+        feed(&mut t, "abc你\x1b[1G\x1b[2@");
+        assert_eq!(row_text(&t, 0), "  abc ");
+        assert_no_half_pairs(&t);
+    }
+
+    #[test]
+    fn wide_delete_chars() {
+        let mut t = Term::new(6, 1);
+        feed(&mut t, "你好\x1b[2G\x1b[1P");
+        assert_eq!(row_text(&t, 0), " 好    ");
+        assert_no_half_pairs(&t);
+
+        let mut t = Term::new(6, 1);
+        feed(&mut t, "你好\x1b[1G\x1b[3P");
+        assert_eq!(row_text(&t, 0), "      ");
+        assert_no_half_pairs(&t);
+    }
+
+    #[test]
+    fn wide_resize_cuts_pair() {
+        let mut t = Term::new(6, 2);
+        feed(&mut t, "ab你");
+        t.resize(3, 2);
+        assert_eq!(row_text(&t, 0), "ab ");
+        assert_no_half_pairs(&t);
+
+        let mut t = Term::new(6, 2);
+        feed(&mut t, "\x1b[?1049hab你");
+        t.resize(3, 2);
+        assert_eq!(row_text(&t, 0), "ab ");
+        assert_no_half_pairs(&t);
     }
 }

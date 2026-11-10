@@ -1,4 +1,5 @@
 use std::path::PathBuf;
+use std::sync::OnceLock;
 
 use serde::Deserialize;
 
@@ -25,6 +26,7 @@ const TEMPLATE: &str = r##"# aeternus: configuração
 # shell = ""            # vazio = usa $SHELL; só vale ao abrir; aceita argumentos, ex. "bash -l"
 # scrollback = 10000    # linhas de histórico
 # working_directory = ""  # vazio = diretório atual; só vale ao abrir
+# osc52 = true          # permite que programas escrevam no clipboard via OSC 52
 
 [cursor]
 # shape = "block"       # block, underline ou bar
@@ -73,11 +75,17 @@ pub struct TerminalConfig {
     pub shell: String,
     pub scrollback: usize,
     pub working_directory: String,
+    pub osc52: bool,
 }
 
 impl Default for TerminalConfig {
     fn default() -> Self {
-        Self { shell: String::new(), scrollback: 10_000, working_directory: String::new() }
+        Self {
+            shell: String::new(),
+            scrollback: 10_000,
+            working_directory: String::new(),
+            osc52: true,
+        }
     }
 }
 
@@ -158,7 +166,9 @@ impl Config {
         let c = &self.colors;
         let col = |name: &str, s: &str, fallback: [u8; 3]| -> [u8; 3] {
             colors::parse_hex(s).unwrap_or_else(|| {
-                eprintln!("aeternus: cor inválida em colors.{name}: {s:?} (esperado \"#rrggbb\")");
+                report_error(&format!(
+                    "aeternus: cor inválida em colors.{name}: {s:?} (esperado \"#rrggbb\")"
+                ));
                 fallback
             })
         };
@@ -171,7 +181,10 @@ impl Config {
         let mut ansi = d.ansi;
         for (name, list, base) in [("normal", &c.normal, 0usize), ("bright", &c.bright, 8usize)] {
             if list.len() != 8 {
-                eprintln!("aeternus: colors.{name} precisa de 8 cores (tem {})", list.len());
+                report_error(&format!(
+                    "aeternus: colors.{name} precisa de 8 cores (tem {})",
+                    list.len()
+                ));
                 continue;
             }
             for (i, s) in list.iter().enumerate() {
@@ -182,19 +195,48 @@ impl Config {
     }
 }
 
-#[cfg(windows)]
+static CONFIG_OVERRIDE: OnceLock<PathBuf> = OnceLock::new();
+
+pub fn set_config_path(path: PathBuf) {
+    let _ = CONFIG_OVERRIDE.set(path);
+}
+
 pub fn config_path() -> Option<PathBuf> {
+    match CONFIG_OVERRIDE.get() {
+        Some(p) => Some(p.clone()),
+        None => default_config_path(),
+    }
+}
+
+#[cfg(windows)]
+fn default_config_path() -> Option<PathBuf> {
     let base = PathBuf::from(std::env::var_os("APPDATA")?);
     Some(base.join("aeternus").join("config.toml"))
 }
 
 #[cfg(not(windows))]
-pub fn config_path() -> Option<PathBuf> {
+fn default_config_path() -> Option<PathBuf> {
     let base = match std::env::var_os("XDG_CONFIG_HOME") {
         Some(v) if !v.is_empty() => PathBuf::from(v),
         _ => PathBuf::from(std::env::var_os("HOME")?).join(".config"),
     };
     Some(base.join("aeternus").join("config.toml"))
+}
+
+pub fn report_error(msg: &str) {
+    #[cfg(windows)]
+    {
+        use std::io::Write;
+        let Some(log) = config_path().map(|p| p.with_file_name("aeternus.log")) else { return };
+        if let Some(dir) = log.parent() {
+            let _ = std::fs::create_dir_all(dir);
+        }
+        if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(&log) {
+            let _ = writeln!(f, "{msg}");
+        }
+    }
+    #[cfg(not(windows))]
+    eprintln!("{msg}");
 }
 
 fn write_template(path: &PathBuf) {
