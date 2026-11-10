@@ -1,5 +1,25 @@
 # Changelog
 
+## 1.2.1
+
+### Added
+
+- `terminal.osc52` config option (default `true`) to enable or disable OSC 52 clipboard writes.
+- `--version` and `--config <path>` command line options.
+- Application keypad mode (`ESC =` / `ESC >`).
+- Ctrl+Space sends NUL (0x00) and Ctrl+/ sends 0x1f.
+
+### Fixed
+
+- Glyphs no longer get wrong texture coordinates when the glyph atlas resets in the middle of a frame.
+- Synchronized output (DEC 2026) is forced off after 150 ms, so a program that never turns it off can't freeze the screen.
+- OSC 52 payloads up to 1 MiB of decoded text are accepted; larger ones are ignored instead of being truncated.
+- Overwriting, erasing, inserting or deleting over half of a wide character clears the other half, and resizing no longer leaves half of a pair.
+- Background, selection and block cursor cover both cells of a wide character.
+- XTVERSION reports the actual version instead of a fixed "aeternus 1.1".
+- On Windows, config errors are written to `aeternus.log` next to `config.toml`, since release builds have no console.
+- README no longer claims hot-reload on save, an error banner or color emoji.
+
 ## 1.2
 
 ### Added
@@ -28,6 +48,26 @@ Initial Windows support.
 ---
 
 # Histórico de mudanças
+
+## 1.2.1
+
+### Adicionado
+
+- Opção de configuração `terminal.osc52` (padrão `true`) para ligar ou desligar a escrita no clipboard via OSC 52.
+- Opções de linha de comando `--version` e `--config <caminho>`.
+- Modo de keypad de aplicação (`ESC =` / `ESC >`).
+- Ctrl+Espaço envia NUL (0x00) e Ctrl+/ envia 0x1f.
+
+### Corrigido
+
+- Glifos não recebem mais coordenadas de textura erradas quando o atlas é reiniciado no meio de um frame.
+- A saída sincronizada (DEC 2026) é desligada à força após 150 ms, para que um programa que nunca a desliga não congele a tela.
+- Payloads de OSC 52 com até 1 MiB de texto decodificado são aceitos; maiores são ignorados em vez de truncados.
+- Sobrescrever, apagar, inserir ou excluir sobre metade de um caractere largo limpa a outra metade, e redimensionar não deixa mais metade de um par.
+- Fundo, seleção e cursor em bloco cobrem as duas células de um caractere largo.
+- XTVERSION informa a versão real em vez de um "aeternus 1.1" fixo.
+- No Windows, erros de configuração são gravados em `aeternus.log` ao lado do `config.toml`, já que builds release não têm console.
+- O README não afirma mais recarga ao salvar, faixa de erros nem emoji colorido.
 
 ## 1.2
 

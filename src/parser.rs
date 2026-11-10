@@ -13,6 +13,9 @@ pub trait Perform {
     }
 }
 
+const OSC_MAX: usize = 4096;
+const OSC52_MAX: usize = 4 * ((1 << 20) + 2) / 3 + 64;
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum State {
     Ground,
@@ -32,6 +35,7 @@ pub struct Parser {
     inter: Vec<u8>,
     private: Option<u8>,
     osc: Vec<u8>,
+    osc_overflow: bool,
     utf8: [u8; 4],
     utf8_len: usize,
     utf8_need: usize,
@@ -49,6 +53,7 @@ impl Parser {
             inter: Vec::with_capacity(4),
             private: None,
             osc: Vec::with_capacity(256),
+            osc_overflow: false,
             utf8: [0; 4],
             utf8_len: 0,
             utf8_need: 0,
@@ -140,6 +145,7 @@ impl Parser {
             }
             b']' if self.inter.is_empty() => {
                 self.osc.clear();
+                self.osc_overflow = false;
                 self.state = State::Osc;
             }
             b'P' | b'X' | b'^' | b'_' if self.inter.is_empty() => self.state = State::Ignore,
@@ -197,17 +203,25 @@ impl Parser {
     fn osc<P: Perform>(&mut self, p: &mut P, b: u8) {
         match b {
             0x07 => {
-                p.osc(&self.osc);
+                if !self.osc_overflow {
+                    p.osc(&self.osc);
+                }
                 self.state = State::Ground;
             }
             0x1B => {
-                p.osc(&self.osc);
+                if !self.osc_overflow {
+                    p.osc(&self.osc);
+                }
                 self.enter_escape();
             }
             0x18 | 0x1A => self.state = State::Ground,
             _ => {
-                if self.osc.len() < 4096 {
+                let is52 = self.osc.starts_with(b"52;");
+                let max = if is52 { OSC52_MAX } else { OSC_MAX };
+                if self.osc.len() < max {
                     self.osc.push(b);
+                } else if is52 {
+                    self.osc_overflow = true;
                 }
             }
         }

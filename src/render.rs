@@ -11,7 +11,7 @@ use winit::window::Window;
 use crate::cell::{flags, Cell};
 use crate::colors::Palette;
 use crate::config::Config;
-use crate::term::{CursorShape, Term};
+use crate::term::{CursorShape, Term, WIDE_SPACER};
 
 const ATLAS_SIZE: u32 = 2048;
 const WHITE_UV: [f32; 2] = [1.0 / ATLAS_SIZE as f32, 1.0 / ATLAS_SIZE as f32];
@@ -158,6 +158,7 @@ pub struct Renderer {
     bg_inst: Vec<Instance>,
     fg_inst: Vec<Instance>,
     effective_bg: [u8; 3],
+    atlas_reset: bool,
 }
 
 impl Renderer {
@@ -321,6 +322,7 @@ impl Renderer {
             bg_inst: Vec::new(),
             fg_inst: Vec::new(),
             effective_bg: cfg.palette.bg,
+            atlas_reset: false,
         }
     }
 
@@ -424,6 +426,7 @@ impl Renderer {
         self.atlas.reset();
         self.glyphs.clear();
         self.ascii.fill(None);
+        self.atlas_reset = true;
     }
 
     fn rasterize(&mut self, ch: char, bold: bool, italic: bool) -> Option<GlyphInfo> {
@@ -473,6 +476,15 @@ impl Renderer {
     /// Monta as instâncias a partir do terminal. Roda com o lock do Term preso,
     /// então não toca na GPU: o desenho de verdade fica em `draw`.
     pub fn build(&mut self, term: &Term, view: &View) {
+        self.atlas_reset = false;
+        self.build_pass(term, view);
+        if self.atlas_reset {
+            self.atlas_reset = false;
+            self.build_pass(term, view);
+        }
+    }
+
+    fn build_pass(&mut self, term: &Term, view: &View) {
         let mut bgs = std::mem::take(&mut self.bg_inst);
         let mut fgs = std::mem::take(&mut self.fg_inst);
         bgs.clear();
@@ -525,6 +537,13 @@ impl Renderer {
                 if cell == Cell::BLANK && !selected && !at_cursor {
                     continue;
                 }
+                let is_spacer = cell.flags & WIDE_SPACER != 0;
+                if is_spacer && c > 0 && !at_cursor {
+                    continue;
+                }
+                let wide = !is_spacer
+                    && row.get(c + 1).map_or(false, |n| n.flags & WIDE_SPACER != 0);
+                let w = if wide { cw * 2.0 } else { cw };
 
                 let x = pad + c as f32 * cw;
                 let block_cursor = at_cursor && block;
@@ -545,7 +564,7 @@ impl Renderer {
                 }
 
                 if bg != pal.bg {
-                    bgs.push(Instance::rect(x, y, cw, ch, bg));
+                    bgs.push(Instance::rect(x, y, w, ch, bg));
                 }
 
                 if cell.ch != ' ' && cell.flags & flags::HIDDEN == 0 {
@@ -563,10 +582,10 @@ impl Renderer {
                 }
 
                 if cell.flags & flags::UNDERLINE != 0 {
-                    fgs.push(Instance::rect(x, y + ch - thick * 2.0, cw, thick, fg));
+                    fgs.push(Instance::rect(x, y + ch - thick * 2.0, w, thick, fg));
                 }
                 if cell.flags & flags::STRIKE != 0 {
-                    fgs.push(Instance::rect(x, y + (ch / 2.0).floor(), cw, thick, fg));
+                    fgs.push(Instance::rect(x, y + (ch / 2.0).floor(), w, thick, fg));
                 }
 
                 if at_cursor && !block_cursor {

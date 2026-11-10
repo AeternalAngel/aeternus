@@ -34,7 +34,7 @@ use winit::application::ApplicationHandler;
 use winit::dpi::{LogicalSize, PhysicalSize};
 use winit::event::{ElementState, KeyEvent, MouseButton, MouseScrollDelta, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop, EventLoopProxy};
-use winit::keyboard::{Key, ModifiersState, NamedKey};
+use winit::keyboard::{Key, KeyLocation, ModifiersState, NamedKey};
 use winit::window::{CursorIcon, Window, WindowId};
 #[cfg(unix)]
 use winit::platform::wayland::WindowAttributesExtWayland;
@@ -82,7 +82,7 @@ struct State {
 impl State {
     fn new(el: &ActiveEventLoop, proxy: EventLoopProxy<UserEvent>) -> Self {
         let cfg = config::load().unwrap_or_else(|e| {
-            eprintln!("aeternus: erro na configuração, usando os padrões:\n{e}");
+            config::report_error(&format!("aeternus: erro na configuração, usando os padrões:\n{e}"));
             Config::default()
         });
 
@@ -217,7 +217,9 @@ impl State {
                 self.resize(size);
                 eprintln!("aeternus: configuração recarregada");
             }
-            Err(e) => eprintln!("aeternus: erro na configuração (mantida a atual):\n{e}"),
+            Err(e) => {
+                config::report_error(&format!("aeternus: erro na configuração (mantida a atual):\n{e}"))
+            }
         }
         self.window.request_redraw();
     }
@@ -368,7 +370,7 @@ impl State {
             }
         }
 
-        if let Some(bytes) = key_bytes(event, mods, t.app_cursor_keys) {
+        if let Some(bytes) = key_bytes(event, mods, t.app_cursor_keys, t.app_keypad) {
             t.scroll_to_bottom();
             t.selection_clear();
             drop(t);
@@ -586,12 +588,17 @@ impl ApplicationHandler<UserEvent> for App {
     /// Controla o piscar do cursor: acorda só quando precisa alternar.
     fn about_to_wait(&mut self, el: &ActiveEventLoop) {
         let Some(s) = self.state.as_mut() else { return };
-        let blinking = {
-            let t = s.term.lock().unwrap();
-            s.focused && t.cursor_blink && t.cursor_visible
+        let now = Instant::now();
+        let (blinking, sync_expired, sync_deadline) = {
+            let mut t = s.term.lock().unwrap();
+            let expired = t.expire_sync(now);
+            (s.focused && t.cursor_blink && t.cursor_visible, expired, t.sync_deadline())
         };
+        if sync_expired {
+            s.window.request_redraw();
+        }
+        let mut wake = sync_deadline;
         if blinking {
-            let now = Instant::now();
             let mut next = s.last_blink + BLINK_INTERVAL;
             if now >= next {
                 s.blink_on = !s.blink_on;
@@ -599,13 +606,14 @@ impl ApplicationHandler<UserEvent> for App {
                 next = now + BLINK_INTERVAL;
                 s.window.request_redraw();
             }
-            el.set_control_flow(ControlFlow::WaitUntil(next));
-        } else {
-            if !s.blink_on {
-                s.blink_on = true;
-                s.window.request_redraw();
-            }
-            el.set_control_flow(ControlFlow::Wait);
+            wake = Some(wake.map_or(next, |w| w.min(next)));
+        } else if !s.blink_on {
+            s.blink_on = true;
+            s.window.request_redraw();
+        }
+        match wake {
+            Some(w) => el.set_control_flow(ControlFlow::WaitUntil(w)),
+            None => el.set_control_flow(ControlFlow::Wait),
         }
     }
 
@@ -640,6 +648,7 @@ impl ApplicationHandler<UserEvent> for App {
                         s.last_title = t.title.clone();
                     }
                     clip = t.clipboard_write.take();
+                    t.expire_sync(Instant::now());
                     if t.sync_output {
                         skip_draw = true;
                     } else {
@@ -691,7 +700,12 @@ fn mouse_report(
     }
 }
 
-fn key_bytes(ev: &KeyEvent, mods: ModifiersState, app_cursor: bool) -> Option<Vec<u8>> {
+fn key_bytes(
+    ev: &KeyEvent,
+    mods: ModifiersState,
+    app_cursor: bool,
+    app_keypad: bool,
+) -> Option<Vec<u8>> {
     let m = 1
         + mods.shift_key() as u8
         + 2 * mods.alt_key() as u8
@@ -729,6 +743,27 @@ fn key_bytes(ev: &KeyEvent, mods: ModifiersState, app_cursor: bool) -> Option<Ve
             Key::Named(NamedKey::ArrowLeft) => return Some(vec![0x1b, b'b']),
             Key::Named(NamedKey::ArrowRight) => return Some(vec![0x1b, b'f']),
             _ => {}
+        }
+    }
+
+    if app_keypad && !modified && ev.location == KeyLocation::Numpad {
+        let code = match &ev.logical_key {
+            Key::Named(NamedKey::Enter) => Some(b'M'),
+            Key::Character(s) if s.len() == 1 => match s.as_bytes()[0] {
+                d @ b'0'..=b'9' => Some(b'p' + (d - b'0')),
+                b'.' => Some(b'n'),
+                b',' => Some(b'l'),
+                b'+' => Some(b'k'),
+                b'-' => Some(b'm'),
+                b'*' => Some(b'j'),
+                b'/' => Some(b'o'),
+                b'=' => Some(b'X'),
+                _ => None,
+            },
+            _ => None,
+        };
+        if let Some(c) = code {
+            return Some(vec![0x1b, b'O', c]);
         }
     }
 
@@ -771,9 +806,13 @@ fn key_bytes(ev: &KeyEvent, mods: ModifiersState, app_cursor: bool) -> Option<Ve
                 if mods.shift_key() { b"\x1b[Z".to_vec() } else { b"\t".to_vec() }
             }
             NamedKey::Escape => vec![0x1b],
-            NamedKey::Space => b" ".to_vec(),
+            NamedKey::Space => {
+                if mods.control_key() { vec![0x00] } else { b" ".to_vec() }
+            }
             _ => ev.text.as_ref()?.as_bytes().to_vec(),
         },
+        Key::Character(s) if mods.control_key() && s.as_str() == " " => vec![0x00],
+        Key::Character(s) if mods.control_key() && s.as_str() == "/" => vec![0x1f],
         Key::Character(s)
             if mods.control_key()
                 && s.len() == 1
@@ -790,7 +829,29 @@ fn key_bytes(ev: &KeyEvent, mods: ModifiersState, app_cursor: bool) -> Option<Ve
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    if std::env::args().any(|a| a == "--bench") {
+    let mut args = std::env::args().skip(1);
+    let mut run_bench = false;
+    while let Some(a) = args.next() {
+        match a.as_str() {
+            "--version" => {
+                println!("aeternus {}", env!("CARGO_PKG_VERSION"));
+                return Ok(());
+            }
+            "--bench" => run_bench = true,
+            "--config" => match args.next() {
+                Some(p) => config::set_config_path(p.into()),
+                None => {
+                    eprintln!("aeternus: --config precisa de um caminho");
+                    std::process::exit(2);
+                }
+            },
+            s if s.starts_with("--config=") => {
+                config::set_config_path(s["--config=".len()..].into());
+            }
+            _ => {}
+        }
+    }
+    if run_bench {
         bench::run_all();
         return Ok(());
     }
