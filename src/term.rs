@@ -359,8 +359,15 @@ impl Term {
 
     pub fn resize(&mut self, cols: usize, rows: usize) {
         self.selection = None;
-        let old_rows = self.rows();
-        if self.main_grid.is_none() {
+        if self.main_grid.is_some() {
+            self.grid = self.grid.resized(cols, rows);
+            if let Some(g) = &mut self.main_grid {
+                *g = g.resized(cols, rows);
+            }
+        } else if cols != self.cols() {
+            self.reflow(cols, rows);
+        } else {
+            let old_rows = self.rows();
             let mut shift_up = 0;
             let mut pull = 0;
             if rows < old_rows {
@@ -381,23 +388,16 @@ impl Term {
                     g.row_mut(pull - 1 - i)[..n].copy_from_slice(&line[..n]);
                 }
             }
-            let old_cols = self.cols();
             for r in shift_up..old_rows {
                 let nr = r - shift_up + pull;
                 if nr >= rows {
                     break;
                 }
-                let n = old_cols.min(cols);
-                g.row_mut(nr)[..n].copy_from_slice(&self.grid.row(r)[..n]);
+                g.row_mut(nr).copy_from_slice(self.grid.row(r));
             }
             self.grid = g;
             self.cursor.row = (self.cursor.row + pull).saturating_sub(shift_up);
             self.display_offset = self.display_offset.min(self.scrollback.len());
-        } else {
-            self.grid = self.grid.resized(cols, rows);
-            if let Some(g) = &mut self.main_grid {
-                *g = g.resized(cols, rows);
-            }
         }
         fix_wide_pairs(&mut self.grid);
         if let Some(g) = &mut self.main_grid {
@@ -406,6 +406,78 @@ impl Term {
         self.scroll_top = 0;
         self.scroll_bottom = rows - 1;
         self.move_to(self.cursor.row, self.cursor.col);
+    }
+
+    fn reflow(&mut self, cols: usize, rows: usize) {
+        let old_sb_len = self.scrollback.len();
+        let old_rows = self.rows();
+        let cursor_phys_index = old_sb_len + self.cursor.row;
+        let cursor_col = self.cursor.col;
+
+        let mut physical: Vec<(Vec<Cell>, bool)> = Vec::with_capacity(old_sb_len + old_rows);
+        for line in self.scrollback.drain(..) {
+            let wrapped = line.last().map_or(false, |c| c.flags & WRAPLINE != 0);
+            physical.push((line, wrapped));
+        }
+        for r in 0..old_rows {
+            let row = self.grid.row(r);
+            let wrapped = row[row.len() - 1].flags & WRAPLINE != 0;
+            let len = if wrapped {
+                row.len()
+            } else {
+                row.iter().rposition(|c| *c != Cell::BLANK).map_or(0, |p| p + 1)
+            };
+            physical.push((row[..len].to_vec(), wrapped));
+        }
+
+        let mut new_rows: Vec<Vec<Cell>> = Vec::new();
+        let mut new_cursor = (0usize, 0usize);
+        let mut logical: Vec<Cell> = Vec::new();
+        let mut cursor_offset: Option<usize> = None;
+
+        for (i, (line, wrapped)) in physical.into_iter().enumerate() {
+            if i == cursor_phys_index {
+                cursor_offset = Some(logical.len() + cursor_col);
+            }
+            logical.extend(line);
+            if !wrapped {
+                let base = new_rows.len();
+                let chunks = wrap_logical_line(std::mem::take(&mut logical), cols);
+                if let Some(off) = cursor_offset.take() {
+                    new_cursor = (base + off / cols, off % cols);
+                }
+                new_rows.extend(chunks);
+            }
+        }
+        if !logical.is_empty() || new_rows.is_empty() {
+            let base = new_rows.len();
+            let chunks = wrap_logical_line(logical, cols);
+            if let Some(off) = cursor_offset {
+                new_cursor = (base + off / cols, off % cols);
+            }
+            new_rows.extend(chunks);
+        }
+
+        let total = new_rows.len();
+        let grid_start = total.saturating_sub(rows);
+        let pad_top = rows - (total - grid_start);
+        let mut g = Grid::new(cols, rows);
+        for (i, row) in new_rows[grid_start..].iter().enumerate() {
+            g.row_mut(pad_top + i).copy_from_slice(row);
+        }
+        self.grid = g;
+
+        for mut line in new_rows.drain(..grid_start) {
+            let n = line.iter().rposition(|c| *c != Cell::BLANK).map_or(0, |p| p + 1);
+            line.truncate(n);
+            self.scrollback.push_back(line);
+        }
+        self.trim_scrollback();
+
+        let cur_row = new_cursor.0.max(grid_start) - grid_start;
+        self.cursor.row = pad_top + cur_row;
+        self.cursor.col = new_cursor.1;
+        self.display_offset = 0;
     }
 
     /// Representação em texto da grade, para testar sem janela.
@@ -792,6 +864,27 @@ impl Term {
 
 fn is_wide(c: char) -> bool {
     unicode_width::UnicodeWidthChar::width(c) == Some(2)
+}
+
+fn wrap_logical_line(line: Vec<Cell>, cols: usize) -> Vec<Vec<Cell>> {
+    let len = line.len();
+    if len == 0 {
+        return vec![vec![Cell::BLANK; cols]];
+    }
+    let mut out = Vec::with_capacity(len.div_ceil(cols).max(1));
+    let mut i = 0;
+    while i < len {
+        let end = (i + cols).min(len);
+        let mut row = line[i..end].to_vec();
+        if row.len() < cols {
+            row.resize(cols, Cell::BLANK);
+        } else if end < len {
+            row[cols - 1].flags |= WRAPLINE;
+        }
+        out.push(row);
+        i = end;
+    }
+    out
 }
 
 fn fix_wide_pairs(g: &mut Grid) {
@@ -1458,10 +1551,11 @@ mod tests {
 
     #[test]
     fn wide_resize_cuts_pair() {
-        let mut t = Term::new(6, 2);
+        let mut t = Term::new(6, 1);
         feed(&mut t, "ab你");
         t.resize(3, 2);
         assert_eq!(row_text(&t, 0), "ab ");
+        assert_eq!(row_text(&t, 1), "   ");
         assert_no_half_pairs(&t);
 
         let mut t = Term::new(6, 2);
@@ -1469,5 +1563,44 @@ mod tests {
         t.resize(3, 2);
         assert_eq!(row_text(&t, 0), "ab ");
         assert_no_half_pairs(&t);
+    }
+
+    #[test]
+    fn reflow_wraps_long_line_on_narrower_cols() {
+        let mut t = Term::new(10, 1);
+        feed(&mut t, "abcdefghij");
+        t.resize(5, 2);
+        assert_eq!(row_text(&t, 0), "abcde");
+        assert_eq!(row_text(&t, 1), "fghij");
+        assert_eq!(t.grid.row(0)[4].flags & WRAPLINE, WRAPLINE);
+    }
+
+    #[test]
+    fn reflow_rejoins_wrapped_rows_on_wider_cols() {
+        let mut t = Term::new(5, 2);
+        feed(&mut t, "abcdefghij");
+        t.resize(10, 1);
+        assert_eq!(row_text(&t, 0), "abcdefghij");
+    }
+
+    #[test]
+    fn reflow_preserves_cursor_mid_line() {
+        let mut t = Term::new(10, 1);
+        feed(&mut t, "abcdefghij\x1b[1;3H");
+        t.resize(5, 2);
+        assert_eq!(t.cursor.row, 0);
+        assert_eq!(t.cursor.col, 2);
+        assert_eq!(row_text(&t, 0), "abcde");
+    }
+
+    #[test]
+    fn reflow_rejoins_line_split_across_scrollback_and_grid() {
+        let mut t = Term::new(5, 1);
+        feed(&mut t, "abcde");
+        feed(&mut t, "f\r\n");
+        feed(&mut t, "g");
+        t.resize(10, 2);
+        assert_eq!(row_text(&t, 0), "abcdef    ");
+        assert_eq!(row_text(&t, 1), "g         ");
     }
 }

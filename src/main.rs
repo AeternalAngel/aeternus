@@ -41,7 +41,7 @@ use winit::platform::wayland::WindowAttributesExtWayland;
 #[cfg(unix)]
 use winit::platform::x11::WindowAttributesExtX11;
 
-use config::Config;
+use config::{Action, Config, KeyCombo, Keymap};
 use parser::Parser;
 use pty::Pty;
 use render::{Renderer, View};
@@ -49,6 +49,7 @@ use term::{MouseMode, SelMode, Term};
 
 const BLINK_INTERVAL: Duration = Duration::from_millis(530);
 const MULTI_CLICK: Duration = Duration::from_millis(400);
+const CONFIG_POLL_INTERVAL: Duration = Duration::from_millis(1000);
 
 #[derive(Debug)]
 enum UserEvent {
@@ -77,6 +78,9 @@ struct State {
     last_click: Instant,
     last_click_cell: (usize, usize),
     click_count: u8,
+    keymap: Keymap,
+    config_mtime: Option<std::time::SystemTime>,
+    last_config_check: Instant,
 }
 
 impl State {
@@ -151,6 +155,8 @@ impl State {
 
         window.request_redraw();
         let now = Instant::now();
+        let keymap = cfg.keymap.clone();
+        let config_mtime = config::mtime();
         Self {
             window,
             renderer,
@@ -172,6 +178,9 @@ impl State {
             last_click: now,
             last_click_cell: (usize::MAX, usize::MAX),
             click_count: 0,
+            keymap,
+            config_mtime,
+            last_config_check: now,
         }
     }
 
@@ -213,6 +222,7 @@ impl State {
             Ok(cfg) => {
                 self.renderer.apply_config(&cfg);
                 self.term.lock().unwrap().apply_config(&cfg);
+                self.keymap = cfg.keymap;
                 let size = self.window.inner_size();
                 self.resize(size);
                 eprintln!("aeternus: configuração recarregada");
@@ -315,60 +325,14 @@ impl State {
             }
         }
 
-        if mods.control_key() && mods.shift_key() {
-            if let Key::Character(c) = &event.logical_key {
-                match c.as_str().to_lowercase().as_str() {
-                    "c" => {
-                        self.copy_selection(ClipKind::Clipboard);
-                        return;
-                    }
-                    "v" => {
-                        self.paste(ClipKind::Clipboard);
-                        return;
-                    }
-                    "r" => {
-                        self.reload_config();
-                        return;
-                    }
-                    "+" | "=" => {
-                        self.set_zoom(self.renderer.zoom() + 0.1);
-                        return;
-                    }
-                    "-" | "_" => {
-                        self.set_zoom(self.renderer.zoom() - 0.1);
-                        return;
-                    }
-                    "0" | ")" => {
-                        self.set_zoom(1.0);
-                        return;
-                    }
-                    _ => {}
-                }
-            }
-        }
-        if mods.shift_key() && event.logical_key == Key::Named(NamedKey::Insert) {
-            self.paste(ClipKind::Primary);
+        if let Some(action) =
+            self.keymap.0.iter().find(|(c, _)| combo_matches(c, event, mods)).map(|(_, a)| *a)
+        {
+            self.run_action(action);
             return;
         }
 
         let mut t = self.term.lock().unwrap();
-
-        if mods.shift_key() && !mods.control_key() && !t.is_alt_screen() {
-            let page = t.rows() as isize - 1;
-            let delta = match &event.logical_key {
-                Key::Named(NamedKey::PageUp) => Some(page),
-                Key::Named(NamedKey::PageDown) => Some(-page),
-                Key::Named(NamedKey::Home) => Some(isize::MAX),
-                Key::Named(NamedKey::End) => Some(isize::MIN),
-                _ => None,
-            };
-            if let Some(d) = delta {
-                if t.scroll_display(d) {
-                    self.window.request_redraw();
-                }
-                return;
-            }
-        }
 
         if let Some(bytes) = key_bytes(event, mods, t.app_cursor_keys, t.app_keypad) {
             t.scroll_to_bottom();
@@ -377,6 +341,38 @@ impl State {
             self.reset_blink();
             self.write(&bytes);
             self.window.request_redraw();
+        }
+    }
+
+    fn run_action(&mut self, action: Action) {
+        match action {
+            Action::Copy => self.copy_selection(ClipKind::Clipboard),
+            Action::Paste => self.paste(ClipKind::Clipboard),
+            Action::PastePrimary => self.paste(ClipKind::Primary),
+            Action::ReloadConfig => self.reload_config(),
+            Action::ZoomIn => self.set_zoom(self.renderer.zoom() + 0.1),
+            Action::ZoomOut => self.set_zoom(self.renderer.zoom() - 0.1),
+            Action::ZoomReset => self.set_zoom(1.0),
+            Action::ScrollPageUp
+            | Action::ScrollPageDown
+            | Action::ScrollToTop
+            | Action::ScrollToBottom => {
+                let mut t = self.term.lock().unwrap();
+                if t.is_alt_screen() {
+                    return;
+                }
+                let page = t.rows() as isize - 1;
+                let delta = match action {
+                    Action::ScrollPageUp => page,
+                    Action::ScrollPageDown => -page,
+                    Action::ScrollToTop => isize::MAX,
+                    _ => isize::MIN,
+                };
+                if t.scroll_display(delta) {
+                    drop(t);
+                    self.window.request_redraw();
+                }
+            }
         }
     }
 
@@ -597,7 +593,18 @@ impl ApplicationHandler<UserEvent> for App {
         if sync_expired {
             s.window.request_redraw();
         }
+        let mut next_config_check = s.last_config_check + CONFIG_POLL_INTERVAL;
+        if now >= next_config_check {
+            s.last_config_check = now;
+            next_config_check = now + CONFIG_POLL_INTERVAL;
+            let mtime = config::mtime();
+            if mtime != s.config_mtime {
+                s.config_mtime = mtime;
+                s.reload_config();
+            }
+        }
         let mut wake = sync_deadline;
+        wake = Some(wake.map_or(next_config_check, |w| w.min(next_config_check)));
         if blinking {
             let mut next = s.last_blink + BLINK_INTERVAL;
             if now >= next {
@@ -625,6 +632,9 @@ impl ApplicationHandler<UserEvent> for App {
                 std::process::exit(0);
             }
             WindowEvent::Resized(size) => s.resize(size),
+            WindowEvent::ScaleFactorChanged { scale_factor, .. } => {
+                s.renderer.set_scale(scale_factor as f32);
+            }
             WindowEvent::ModifiersChanged(m) => self.mods = m.state(),
             WindowEvent::KeyboardInput { event, .. } => s.key_input(&event, self.mods),
             WindowEvent::MouseInput { state, button, .. } => {
@@ -666,6 +676,68 @@ impl ApplicationHandler<UserEvent> for App {
             _ => {}
         }
     }
+}
+
+fn named_key_alias(key: &str) -> Option<NamedKey> {
+    Some(match key {
+        "pageup" => NamedKey::PageUp,
+        "pagedown" => NamedKey::PageDown,
+        "home" => NamedKey::Home,
+        "end" => NamedKey::End,
+        "insert" => NamedKey::Insert,
+        "delete" => NamedKey::Delete,
+        "enter" => NamedKey::Enter,
+        "escape" => NamedKey::Escape,
+        "tab" => NamedKey::Tab,
+        "space" => NamedKey::Space,
+        "up" => NamedKey::ArrowUp,
+        "down" => NamedKey::ArrowDown,
+        "left" => NamedKey::ArrowLeft,
+        "right" => NamedKey::ArrowRight,
+        "f1" => NamedKey::F1,
+        "f2" => NamedKey::F2,
+        "f3" => NamedKey::F3,
+        "f4" => NamedKey::F4,
+        "f5" => NamedKey::F5,
+        "f6" => NamedKey::F6,
+        "f7" => NamedKey::F7,
+        "f8" => NamedKey::F8,
+        "f9" => NamedKey::F9,
+        "f10" => NamedKey::F10,
+        "f11" => NamedKey::F11,
+        "f12" => NamedKey::F12,
+        _ => return None,
+    })
+}
+
+fn char_alias(key: &str) -> Option<&'static str> {
+    Some(match key {
+        "plus" => "+",
+        "equal" => "=",
+        "minus" => "-",
+        "underscore" => "_",
+        "zero" => "0",
+        "paren_right" => ")",
+        _ => return None,
+    })
+}
+
+fn combo_matches(combo: &KeyCombo, event: &KeyEvent, mods: ModifiersState) -> bool {
+    if combo.shift != mods.shift_key()
+        || combo.ctrl != mods.control_key()
+        || combo.alt != mods.alt_key()
+        || combo.logo != mods.super_key()
+    {
+        return false;
+    }
+    if let Some(named) = named_key_alias(&combo.key) {
+        return event.logical_key == Key::Named(named);
+    }
+    let want = char_alias(&combo.key).unwrap_or(&combo.key);
+    if let Key::Character(s) = &event.logical_key {
+        return s.as_str().eq_ignore_ascii_case(want);
+    }
+    false
 }
 
 /// Codifica um evento de mouse para o app (SGR 1006 ou o formato X10 clássico).

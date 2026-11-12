@@ -1,5 +1,19 @@
 # Changelog
 
+## 1.3
+
+### Added
+
+- Added reflow on resize: wrapped lines are rejoined and rewrapped to fit the new width, using the existing `WRAPLINE` tracking, instead of being cropped or padded.
+- Added live DPI change handling: moving the window to a display with a different scale factor rescales the font and grid immediately.
+- Added colored emoji rendering: the glyph atlas now stores RGBA data, so color glyphs from cosmic-text are drawn with their own colors instead of being tinted by the text color.
+- Added configurable keybindings through a new `[keybindings]` config section (`copy`, `paste`, `paste_primary`, `reload_config`, `zoom_in`, `zoom_out`, `zoom_reset`, `scroll_page_up`, `scroll_page_down`, `scroll_to_top`, `scroll_to_bottom`), each accepting a list of key combinations.
+- Added automatic reload of `config.toml` when it changes on disk, polled once a second; Ctrl+Shift+R still works too.
+
+### Changed
+
+- Changed resizing on the main screen to reflow text instead of just cropping or padding it; the alternate screen (full-screen apps) and height-only resizes are unaffected.
+
 ## 1.2.1
 
 ### Added
@@ -48,6 +62,20 @@ Initial Windows support.
 ---
 
 # Histórico de mudanças
+
+## 1.3
+
+### Adicionado
+
+- Adicionado reflow ao redimensionar: linhas quebradas são rejuntadas e requebradas na nova largura usando a flag `WRAPLINE` já existente, em vez de serem cortadas ou preenchidas.
+- Adicionada atualização de DPI em tempo real: mover a janela para uma tela com escala diferente reajusta a fonte e a grade na hora.
+- Adicionado desenho de emoji coloridos: o atlas de glifos agora guarda dados RGBA, então glifos coloridos do cosmic-text são desenhados com a própria cor em vez de tingidos pela cor do texto.
+- Adicionados atalhos configuráveis através de uma nova seção `[keybindings]` na configuração (`copy`, `paste`, `paste_primary`, `reload_config`, `zoom_in`, `zoom_out`, `zoom_reset`, `scroll_page_up`, `scroll_page_down`, `scroll_to_top`, `scroll_to_bottom`), cada um aceitando uma lista de combinações de tecla.
+- Adicionada recarga automática do `config.toml` quando ele muda no disco, verificada a cada 1 segundo; Ctrl+Shift+R continua funcionando também.
+
+### Alterado
+
+- Alterado o redimensionamento na tela principal para reflowar o texto em vez de só cortar ou preencher; a tela alternativa (apps em tela cheia) e redimensionamentos só de altura não são afetados.
 
 ## 1.2.1
 
