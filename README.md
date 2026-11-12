@@ -51,12 +51,7 @@ The binary will be at `target/release/aeternus` (Linux) or `target/release/aeter
 
 ## Performance
 
-| | Aeternus | kitty |
-|---|---|---|
-| `cat` of 300k colored lines | 0.24 s | 0.32 s |
-| `cat` of 3M lines | 0.81 s | 1.31 s |
-
-Single runs on Linux, taken before wide character support; to be redone. Run `./BENCHMARK.sh` to compare aeternus against kitty on your own machine.
+To be redone.
 
 ## Not supported yet
 
