@@ -39,6 +39,19 @@ const TEMPLATE: &str = r##"# aeternus: configuração
 # cursor = ""           # vazio = mesma cor do texto
 # normal = ["#45475a", "#f38ba8", "#a6e3a1", "#f9e2af", "#89b4fa", "#f5c2e7", "#94e2d5", "#bac2de"]
 # bright = ["#585b70", "#f38ba8", "#a6e3a1", "#f9e2af", "#89b4fa", "#f5c2e7", "#94e2d5", "#cdd6f4"]
+
+[keybindings]
+# copy = ["ctrl+shift+c"]
+# paste = ["ctrl+shift+v"]
+# paste_primary = ["shift+insert"]
+# reload_config = ["ctrl+shift+r"]
+# zoom_in = ["ctrl+shift+plus", "ctrl+shift+equal"]
+# zoom_out = ["ctrl+shift+minus", "ctrl+shift+underscore"]
+# zoom_reset = ["ctrl+shift+zero", "ctrl+shift+paren_right"]
+# scroll_page_up = ["shift+pageup"]
+# scroll_page_down = ["shift+pagedown"]
+# scroll_to_top = ["shift+home"]
+# scroll_to_bottom = ["shift+end"]
 "##;
 
 #[derive(Deserialize, Clone, Debug)]
@@ -133,6 +146,116 @@ impl Default for ColorsConfig {
     }
 }
 
+#[derive(Deserialize, Clone, Debug)]
+#[serde(default, deny_unknown_fields)]
+pub struct KeybindingsConfig {
+    pub copy: Vec<String>,
+    pub paste: Vec<String>,
+    pub paste_primary: Vec<String>,
+    pub reload_config: Vec<String>,
+    pub zoom_in: Vec<String>,
+    pub zoom_out: Vec<String>,
+    pub zoom_reset: Vec<String>,
+    pub scroll_page_up: Vec<String>,
+    pub scroll_page_down: Vec<String>,
+    pub scroll_to_top: Vec<String>,
+    pub scroll_to_bottom: Vec<String>,
+}
+
+impl Default for KeybindingsConfig {
+    fn default() -> Self {
+        let v = |a: &[&str]| a.iter().map(|s| s.to_string()).collect();
+        Self {
+            copy: v(&["ctrl+shift+c"]),
+            paste: v(&["ctrl+shift+v"]),
+            paste_primary: v(&["shift+insert"]),
+            reload_config: v(&["ctrl+shift+r"]),
+            zoom_in: v(&["ctrl+shift+plus", "ctrl+shift+equal"]),
+            zoom_out: v(&["ctrl+shift+minus", "ctrl+shift+underscore"]),
+            zoom_reset: v(&["ctrl+shift+zero", "ctrl+shift+paren_right"]),
+            scroll_page_up: v(&["shift+pageup"]),
+            scroll_page_down: v(&["shift+pagedown"]),
+            scroll_to_top: v(&["shift+home"]),
+            scroll_to_bottom: v(&["shift+end"]),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum Action {
+    Copy,
+    Paste,
+    PastePrimary,
+    ReloadConfig,
+    ZoomIn,
+    ZoomOut,
+    ZoomReset,
+    ScrollPageUp,
+    ScrollPageDown,
+    ScrollToTop,
+    ScrollToBottom,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct KeyCombo {
+    pub shift: bool,
+    pub ctrl: bool,
+    pub alt: bool,
+    pub logo: bool,
+    pub key: String,
+}
+
+impl KeyCombo {
+    pub fn parse(s: &str) -> Option<Self> {
+        let mut c = KeyCombo { shift: false, ctrl: false, alt: false, logo: false, key: String::new() };
+        for part in s.split('+') {
+            match part.trim().to_lowercase().as_str() {
+                "ctrl" | "control" => c.ctrl = true,
+                "shift" => c.shift = true,
+                "alt" => c.alt = true,
+                "super" | "logo" | "cmd" | "meta" => c.logo = true,
+                "" => {}
+                other => c.key = other.to_string(),
+            }
+        }
+        if c.key.is_empty() {
+            None
+        } else {
+            Some(c)
+        }
+    }
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct Keymap(pub Vec<(KeyCombo, Action)>);
+
+fn add_bindings(v: &mut Vec<(KeyCombo, Action)>, list: &[String], action: Action) {
+    for s in list {
+        match KeyCombo::parse(s) {
+            Some(combo) => v.push((combo, action)),
+            None => report_error(&format!("aeternus: combinação de tecla inválida: {s:?}")),
+        }
+    }
+}
+
+impl KeybindingsConfig {
+    fn build(&self) -> Keymap {
+        let mut v = Vec::new();
+        add_bindings(&mut v, &self.copy, Action::Copy);
+        add_bindings(&mut v, &self.paste, Action::Paste);
+        add_bindings(&mut v, &self.paste_primary, Action::PastePrimary);
+        add_bindings(&mut v, &self.reload_config, Action::ReloadConfig);
+        add_bindings(&mut v, &self.zoom_in, Action::ZoomIn);
+        add_bindings(&mut v, &self.zoom_out, Action::ZoomOut);
+        add_bindings(&mut v, &self.zoom_reset, Action::ZoomReset);
+        add_bindings(&mut v, &self.scroll_page_up, Action::ScrollPageUp);
+        add_bindings(&mut v, &self.scroll_page_down, Action::ScrollPageDown);
+        add_bindings(&mut v, &self.scroll_to_top, Action::ScrollToTop);
+        add_bindings(&mut v, &self.scroll_to_bottom, Action::ScrollToBottom);
+        Keymap(v)
+    }
+}
+
 #[derive(Deserialize, Clone, Debug, Default)]
 #[serde(default, deny_unknown_fields)]
 pub struct Config {
@@ -141,9 +264,12 @@ pub struct Config {
     pub terminal: TerminalConfig,
     pub cursor: CursorConfig,
     pub colors: ColorsConfig,
+    pub keybindings: KeybindingsConfig,
     /// Cores já resolvidas (calculado em `load`, não vem do arquivo).
     #[serde(skip)]
     pub palette: Palette,
+    #[serde(skip)]
+    pub keymap: Keymap,
 }
 
 impl Config {
@@ -223,6 +349,10 @@ fn default_config_path() -> Option<PathBuf> {
     Some(base.join("aeternus").join("config.toml"))
 }
 
+pub fn mtime() -> Option<std::time::SystemTime> {
+    std::fs::metadata(config_path()?).ok()?.modified().ok()
+}
+
 pub fn report_error(msg: &str) {
     #[cfg(windows)]
     {
@@ -263,5 +393,45 @@ pub fn load() -> Result<Config, String> {
     };
     cfg.sanitize();
     cfg.palette = cfg.build_palette();
+    cfg.keymap = cfg.keybindings.build();
     Ok(cfg)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn key_combo_parse_modifiers_and_key() {
+        let c = KeyCombo::parse("ctrl+shift+c").unwrap();
+        assert!(c.ctrl && c.shift && !c.alt && !c.logo);
+        assert_eq!(c.key, "c");
+    }
+
+    #[test]
+    fn key_combo_parse_single_key() {
+        let c = KeyCombo::parse("pageup").unwrap();
+        assert!(!c.ctrl && !c.shift && !c.alt && !c.logo);
+        assert_eq!(c.key, "pageup");
+    }
+
+    #[test]
+    fn key_combo_parse_rejects_only_modifiers() {
+        assert!(KeyCombo::parse("ctrl+shift").is_none());
+    }
+
+    #[test]
+    fn key_combo_parse_is_case_insensitive() {
+        let c = KeyCombo::parse("Ctrl+Shift+R").unwrap();
+        assert!(c.ctrl && c.shift);
+        assert_eq!(c.key, "r");
+    }
+
+    #[test]
+    fn keybindings_default_builds_known_actions() {
+        let km = KeybindingsConfig::default().build();
+        assert!(km.0.iter().any(|(_, a)| *a == Action::Copy));
+        assert!(km.0.iter().any(|(_, a)| *a == Action::ZoomIn));
+        assert!(km.0.iter().any(|(_, a)| *a == Action::ScrollToBottom));
+    }
 }

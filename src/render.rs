@@ -30,11 +30,12 @@ struct Instance {
     uv_pos: [f32; 2],
     uv_size: [f32; 2],
     color: [f32; 4],
+    color_glyph: f32,
 }
 
 impl Instance {
-    const ATTRS: [wgpu::VertexAttribute; 5] = wgpu::vertex_attr_array![
-        0 => Float32x2, 1 => Float32x2, 2 => Float32x2, 3 => Float32x2, 4 => Float32x4
+    const ATTRS: [wgpu::VertexAttribute; 6] = wgpu::vertex_attr_array![
+        0 => Float32x2, 1 => Float32x2, 2 => Float32x2, 3 => Float32x2, 4 => Float32x4, 5 => Float32
     ];
 
     fn layout() -> wgpu::VertexBufferLayout<'static> {
@@ -52,6 +53,7 @@ impl Instance {
             uv_pos: WHITE_UV,
             uv_size: [0.0, 0.0],
             color: color4(rgb),
+            color_glyph: 0.0,
         }
     }
 }
@@ -66,6 +68,7 @@ struct GlyphInfo {
     uv_size: [f32; 2],
     off: [f32; 2],
     size: [f32; 2],
+    is_color: bool,
 }
 
 /// Atlas R8 com empacotamento em "prateleiras". O bloco 2x2 em (0,0) é branco.
@@ -84,12 +87,12 @@ impl Atlas {
             mip_level_count: 1,
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
-            format: wgpu::TextureFormat::R8Unorm,
+            format: wgpu::TextureFormat::Rgba8Unorm,
             usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
             view_formats: &[],
         });
         let atlas = Self { texture, x: 3, y: 0, row_h: 2 };
-        atlas.write(queue, 0, 0, 2, 2, &[255; 4]);
+        atlas.write(queue, 0, 0, 2, 2, &[255; 16]);
         atlas
     }
 
@@ -124,7 +127,7 @@ impl Atlas {
                 aspect: wgpu::TextureAspect::All,
             },
             data,
-            wgpu::ImageDataLayout { offset: 0, bytes_per_row: Some(w), rows_per_image: Some(h) },
+            wgpu::ImageDataLayout { offset: 0, bytes_per_row: Some(w * 4), rows_per_image: Some(h) },
             wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
         );
     }
@@ -152,6 +155,7 @@ pub struct Renderer {
     scale: f32,
     zoom: f32,
     pad: f32,
+    window_padding: f32,
     palette: Palette,
     pub cell_w: f32,
     pub cell_h: f32,
@@ -316,6 +320,7 @@ impl Renderer {
             scale,
             zoom: 1.0,
             pad: (cfg.window.padding * scale).round(),
+            window_padding: cfg.window.padding,
             palette: cfg.palette.clone(),
             cell_w,
             cell_h,
@@ -370,8 +375,18 @@ impl Renderer {
         self.font_family = cfg.font.family.clone();
         self.base_font_size = cfg.font.size;
         self.line_height = cfg.font.line_height;
-        self.pad = (cfg.window.padding * self.scale).round();
+        self.window_padding = cfg.window.padding;
+        self.pad = (self.window_padding * self.scale).round();
         self.palette = cfg.palette.clone();
+        self.recompute_metrics();
+    }
+
+    pub fn set_scale(&mut self, scale: f32) {
+        if scale == self.scale {
+            return;
+        }
+        self.scale = scale;
+        self.pad = (self.window_padding * self.scale).round();
         self.recompute_metrics();
     }
 
@@ -449,9 +464,11 @@ impl Renderer {
         if p.width == 0 || p.height == 0 {
             return None;
         }
-        let alpha: Vec<u8> = match image.content {
-            SwashContent::Mask => image.data.clone(),
-            SwashContent::Color => image.data.chunks_exact(4).map(|px| px[3]).collect(),
+        let (is_color, rgba): (bool, Vec<u8>) = match image.content {
+            SwashContent::Mask => {
+                (false, image.data.iter().flat_map(|&a| [a, 0, 0, 0]).collect())
+            }
+            SwashContent::Color => (true, image.data.clone()),
             _ => return None,
         };
 
@@ -462,7 +479,7 @@ impl Renderer {
                 self.atlas.alloc(p.width, p.height)?
             }
         };
-        self.atlas.write(&self.queue, ax, ay, p.width, p.height, &alpha);
+        self.atlas.write(&self.queue, ax, ay, p.width, p.height, &rgba);
 
         let a = ATLAS_SIZE as f32;
         Some(GlyphInfo {
@@ -470,6 +487,7 @@ impl Renderer {
             uv_size: [p.width as f32 / a, p.height as f32 / a],
             off: [(phys.x + p.left) as f32, (line_y as i32 + phys.y - p.top) as f32],
             size: [p.width as f32, p.height as f32],
+            is_color,
         })
     }
 
@@ -577,6 +595,7 @@ impl Renderer {
                             uv_pos: g.uv_pos,
                             uv_size: g.uv_size,
                             color: color4(fg),
+                            color_glyph: if g.is_color { 1.0 } else { 0.0 },
                         });
                     }
                 }

@@ -14,12 +14,14 @@ struct VsIn {
     @location(2) uv_pos: vec2<f32>,
     @location(3) uv_size: vec2<f32>,
     @location(4) color: vec4<f32>,
+    @location(5) color_glyph: f32,
 };
 
 struct VsOut {
     @builtin(position) clip: vec4<f32>,
     @location(0) uv: vec2<f32>,
     @location(1) color: vec4<f32>,
+    @location(2) color_glyph: f32,
 };
 
 @vertex
@@ -31,11 +33,15 @@ fn vs_main(inp: VsIn) -> VsOut {
     o.clip = vec4<f32>(ndc, 0.0, 1.0);
     o.uv = inp.uv_pos + corner * inp.uv_size;
     o.color = inp.color;
+    o.color_glyph = inp.color_glyph;
     return o;
 }
 
 @fragment
 fn fs_main(inp: VsOut) -> @location(0) vec4<f32> {
-    let a = textureSample(atlas, samp, inp.uv).r;
-    return vec4<f32>(inp.color.rgb, inp.color.a * a);
+    let tex = textureSample(atlas, samp, inp.uv);
+    if inp.color_glyph > 0.5 {
+        return vec4<f32>(tex.rgb, tex.a * inp.color.a);
+    }
+    return vec4<f32>(inp.color.rgb, inp.color.a * tex.r);
 }
