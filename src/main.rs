@@ -1,6 +1,4 @@
 #![allow(dead_code)]
-#![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
-
 mod bench;
 mod cell;
 mod colors;
@@ -10,61 +8,198 @@ mod parser;
 mod pty;
 mod render;
 mod term;
-
-use std::io::{Read, Write};
+use std::io::{BufRead, BufReader, Read, Write};
+use std::os::unix::net::{UnixListener, UnixStream};
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
-
-#[cfg(unix)]
 use arboard::{Clipboard, GetExtLinux, LinuxClipboardKind, SetExtLinux};
-#[cfg(windows)]
-use arboard::Clipboard;
-
-#[cfg(windows)]
-enum ClipKind {
-    Clipboard,
-    Primary,
-}
-#[cfg(unix)]
 type ClipKind = LinuxClipboardKind;
-
 use winit::application::ApplicationHandler;
 use winit::dpi::{LogicalSize, PhysicalSize};
 use winit::event::{ElementState, KeyEvent, MouseButton, MouseScrollDelta, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop, EventLoopProxy};
 use winit::keyboard::{Key, KeyLocation, ModifiersState, NamedKey};
-use winit::window::{CursorIcon, Window, WindowId};
-#[cfg(unix)]
+use winit::window::{CursorIcon, Fullscreen, Window, WindowId};
 use winit::platform::wayland::WindowAttributesExtWayland;
-#[cfg(unix)]
 use winit::platform::x11::WindowAttributesExtX11;
-
-use config::{Action, Config, KeyCombo, Keymap};
+use config::{Action as KeyAction, Config, KeyCombo, Keymap};
 use parser::Parser;
 use pty::Pty;
-use render::{Renderer, View};
+use render::{Action, Renderer, SettingsOutcome, View};
 use term::{MouseMode, SelMode, Term};
-
 const BLINK_INTERVAL: Duration = Duration::from_millis(530);
 const MULTI_CLICK: Duration = Duration::from_millis(400);
+const ABOUT_BLOB: [&str; 11] = [
+    "@@@@@@@@@@@@@@@@@@@@",
+    "#@@@@@@@@@@@@@@@@@@#",
+    "@@@@@@@@@@@@@@@@@@@@",
+    "@@@@..@@@@@@@@@@@@@@",
+    "@@@@@@...@@@@@@@@@@@",
+    "@@@@@@@@...@@@@@@@@@",
+    "@@@@@@...@@@@@@@@@@@",
+    "@@@@..@@@@@#====@@@@",
+    "@@@@@@@@@@@@@@@@@@@@",
+    "#@@@@@@@@@@@@@@@@@@#",
+    "@@@@@@@@@@@@@@@@@@@@",
+];
+const ABOUT_LOGO: [&str; 6] = [
+    r"     _        _                            ",
+    r"    / \   ___| |_ ___ _ __ _ __  _   _ ___ ",
+    r"   / _ \ / _ \ __/ _ \ '__| '_ \| | | / __|",
+    r"  / ___ \  __/ ||  __/ |  | | | | |_| \__ \",
+    r" /_/   \_\___\__\ ___|_|  |_| |_|\__,_|___/",
+    ""
+];
+
+fn sgr_run(line: &mut String, text: &str, col: [u8; 3]) {
+    if text.is_empty() {
+        return;
+    }
+    line.push_str(&format!("\x1b[38;2;{};{};{}m{}", col[0], col[1], col[2], text));
+}
+
+fn about_art() -> String {
+    const INK: [u8; 3] = [2, 4, 6];
+    const SENTINEL: [u8; 3] = [1, 2, 3];
+    let blob_w = ABOUT_BLOB.iter().map(|l| l.chars().count()).max().unwrap_or(0);
+    let logo_w = ABOUT_LOGO.iter().map(|l| l.chars().count()).max().unwrap_or(0);
+    let top = (ABOUT_BLOB.len() - ABOUT_LOGO.len()) / 2;
+    let mut out = String::from("\r\n");
+    for r in 0..ABOUT_BLOB.len() {
+        let ver = format!("v{}", env!("CARGO_PKG_VERSION"));
+        let blob = format!("{:<blob_w$}", ABOUT_BLOB[r], blob_w = blob_w);
+        let logo = match r.checked_sub(top).and_then(|i| ABOUT_LOGO.get(i)) {
+            Some(l) => format!("{:<logo_w$}", l, logo_w = logo_w),
+            None if r == top + ABOUT_LOGO.len() => {
+                format!("{:^logo_w$}", ver, logo_w = logo_w)
+            }
+            None => " ".repeat(logo_w),
+        };
+        let mut line = String::new();
+        for (text, colored) in [(&blob, true), (&logo, false)] {
+            let mut run = String::new();
+            let mut cur: Option<[u8; 3]> = None;
+            for c in text.chars() {
+                let col = if colored && (c == '@' || c == '#') { SENTINEL } else { INK };
+                if cur == Some(col) {
+                    run.push(c);
+                } else {
+                    sgr_run(&mut line, &run, cur.unwrap_or(INK));
+                    run.clear();
+                    run.push(c);
+                    cur = Some(col);
+                }
+            }
+            sgr_run(&mut line, &run, cur.unwrap_or(INK));
+        }
+        let trimmed = line.trim_end();
+        out.push_str(trimmed);
+        out.push_str("\r\n");
+    }
+    out
+}
 const CONFIG_POLL_INTERVAL: Duration = Duration::from_millis(1000);
 
 #[derive(Debug)]
 enum UserEvent {
-    Wakeup,
-    Exit,
+    Wakeup(u64),
+    CloseTab(u64),
+    Aet(AetCmd, UnixStream),
 }
 
-struct State {
-    window: Arc<Window>,
-    renderer: Renderer,
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum AetCmd {
+    Version,
+    Pref,
+    Reload,
+}
+
+fn parse_aet(line: &[u8]) -> Option<AetCmd> {
+    let s = std::str::from_utf8(line).ok()?.trim();
+    match s {
+        "version" => Some(AetCmd::Version),
+        "pref" => Some(AetCmd::Pref),
+        "reload" => Some(AetCmd::Reload),
+        _ => None,
+    }
+}
+
+fn aet_tag() -> String {
+    let d = std::env::var("WAYLAND_DISPLAY")
+        .or_else(|_| std::env::var("DISPLAY"))
+        .unwrap_or_else(|_| String::from("default"));
+    d.chars().map(|c| if c.is_ascii_alphanumeric() { c } else { '_' }).collect()
+}
+
+fn aet_paths() -> (PathBuf, PathBuf) {
+    let dir = std::env::var_os("XDG_RUNTIME_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("/tmp"));
+    let tag = aet_tag();
+    (
+        dir.join(format!("aeternus-{tag}-{}.sock", std::process::id())),
+        dir.join(format!("aeternus-{tag}.last")),
+    )
+}
+
+fn aet_listener(l: UnixListener, proxy: EventLoopProxy<UserEvent>) {
+    for conn in l.incoming() {
+        let Ok(mut s) = conn else { break };
+        let _ = s.set_read_timeout(Some(Duration::from_secs(3)));
+        let _ = s.set_write_timeout(Some(Duration::from_secs(3)));
+        let Ok(r) = s.try_clone() else { continue };
+        let mut line = String::new();
+        let mut r = BufReader::new(r);
+        if r.read_line(&mut line).is_err() {
+            continue;
+        }
+        match parse_aet(line.as_bytes()) {
+            Some(cmd) => {
+                let _ = proxy.send_event(UserEvent::Aet(cmd, s));
+            }
+            None => {
+                let _ = s.write_all(b"err comando desconhecido\n");
+            }
+        }
+    }
+}
+
+fn aet_cleanup(sock: &PathBuf, last: &PathBuf) {
+    let _ = std::fs::remove_file(sock);
+    let mine = sock.to_string_lossy().to_string();
+    if std::fs::read_to_string(last).map_or(false, |c| c.trim() == mine) {
+        let _ = std::fs::remove_file(last);
+    }
+}
+
+fn aet_bind(app: &mut App) {
+    let (sock, last) = aet_paths();
+    let _ = std::fs::remove_file(&sock);
+    let Ok(l) = UnixListener::bind(&sock) else { return };
+    let _ = std::fs::write(&last, sock.to_string_lossy().as_bytes());
+    let proxy = app.proxy.clone();
+    app.sock = Some((sock, last));
+    thread::spawn(move || aet_listener(l, proxy));
+}
+struct Tab {
+    id: u64,
     term: Arc<Mutex<Term>>,
     pty: Pty,
     dirty: Arc<AtomicBool>,
     want_lock: Arc<AtomicBool>,
+}
+struct State {
+    window: Arc<Window>,
+    renderer: Renderer,
+    proxy: EventLoopProxy<UserEvent>,
+    tabs: Vec<Tab>,
+    active: usize,
+    next_id: u64,
     last_title: String,
+    cfg: Config,
     scroll_accum: f32,
     clipboard: Option<Clipboard>,
     focused: bool,
@@ -78,93 +213,75 @@ struct State {
     last_click: Instant,
     last_click_cell: (usize, usize),
     click_count: u8,
+    sock: Option<(PathBuf, PathBuf)>,
     keymap: Keymap,
     config_mtime: Option<std::time::SystemTime>,
     last_config_check: Instant,
 }
-
+fn reader_loop(
+    id: u64,
+    mut reader: Box<dyn Read + Send>,
+    term: Arc<Mutex<Term>>,
+    writer: Arc<Mutex<Box<dyn Write + Send>>>,
+    dirty: Arc<AtomicBool>,
+    want_lock: Arc<AtomicBool>,
+    proxy: EventLoopProxy<UserEvent>,
+) {
+    let mut parser = Parser::new();
+    let mut buf = vec![0u8; 65536];
+    loop {
+        match reader.read(&mut buf) {
+            Ok(0) | Err(_) => break,
+            Ok(n) => {
+                while want_lock.load(Ordering::Relaxed) {
+                    thread::yield_now();
+                }
+                let replies = {
+                    let mut term = term.lock().unwrap();
+                    parser.advance(&mut *term, &buf[..n]);
+                    std::mem::take(&mut term.replies)
+                };
+                if !replies.is_empty() {
+                    let _ = writer.lock().unwrap().write_all(&replies);
+                }
+                if !dirty.swap(true, Ordering::AcqRel) {
+                    let _ = proxy.send_event(UserEvent::Wakeup(id));
+                }
+            }
+        }
+    }
+    let _ = proxy.send_event(UserEvent::CloseTab(id));
+}
 impl State {
     fn new(el: &ActiveEventLoop, proxy: EventLoopProxy<UserEvent>) -> Self {
         let cfg = config::load().unwrap_or_else(|e| {
             config::report_error(&format!("aeternus: erro na configuração, usando os padrões:\n{e}"));
             Config::default()
         });
-
         let attrs = Window::default_attributes()
             .with_title("aeternus")
             .with_inner_size(LogicalSize::new(
                 cfg.window.width as f64,
                 cfg.window.height as f64,
-            ));
-        #[cfg(unix)]
+            ))
+            .with_decorations(true);
         let attrs = WindowAttributesExtWayland::with_name(attrs, "aeternus", "aeternus");
-        #[cfg(unix)]
         let attrs = WindowAttributesExtX11::with_name(attrs, "aeternus", "aeternus");
         let window = Arc::new(el.create_window(attrs).expect("janela"));
         window.set_cursor(CursorIcon::Text);
         let renderer = Renderer::new(window.clone(), &cfg);
-        let (cols, rows) = renderer.grid_size();
-
-        let mut t = Term::new(cols, rows);
-        t.apply_config(&cfg);
-        let term = Arc::new(Mutex::new(t));
-
-        let shell = if cfg.terminal.shell.trim().is_empty() {
-        #[cfg(windows)]
-        let fallback = std::env::var("COMSPEC").unwrap_or_else(|_| "cmd.exe".into());
-        #[cfg(not(windows))]
-        let fallback = std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".into());
-            fallback
-        } else {
-            cfg.terminal.shell.trim().to_string()
-        };
-        let (pty, mut reader) =
-            Pty::spawn(&shell, &cfg.terminal.working_directory, cols as u16, rows as u16)
-                .expect("pty");
-        let dirty = Arc::new(AtomicBool::new(false));
-        let want_lock = Arc::new(AtomicBool::new(false));
-
-        let writer = pty.writer.clone();
-        let (t, d, wl) = (term.clone(), dirty.clone(), want_lock.clone());
-        thread::spawn(move || {
-            let mut parser = Parser::new();
-            let mut buf = vec![0u8; 65536];
-            loop {
-                match reader.read(&mut buf) {
-                    Ok(0) | Err(_) => break,
-                    Ok(n) => {
-                        while wl.load(Ordering::Relaxed) {
-                            thread::yield_now();
-                        }
-                        let replies = {
-                            let mut term = t.lock().unwrap();
-                            parser.advance(&mut *term, &buf[..n]);
-                            std::mem::take(&mut term.replies)
-                        };
-                        if !replies.is_empty() {
-                            let _ = writer.lock().unwrap().write_all(&replies);
-                        }
-                        if !d.swap(true, Ordering::AcqRel) {
-                            let _ = proxy.send_event(UserEvent::Wakeup);
-                        }
-                    }
-                }
-            }
-            let _ = proxy.send_event(UserEvent::Exit);
-        });
-
-        window.request_redraw();
         let now = Instant::now();
         let keymap = cfg.keymap.clone();
         let config_mtime = config::mtime();
-        Self {
+        let mut state = Self {
             window,
             renderer,
-            term,
-            pty,
-            dirty,
-            want_lock,
+            proxy,
+            tabs: Vec::new(),
+            active: 0,
+            next_id: 0,
             last_title: String::new(),
+            cfg,
             scroll_accum: 0.0,
             clipboard: Clipboard::new().ok(),
             focused: true,
@@ -178,50 +295,171 @@ impl State {
             last_click: now,
             last_click_cell: (usize::MAX, usize::MAX),
             click_count: 0,
+            sock: None,
             keymap,
             config_mtime,
             last_config_check: now,
+        };
+        state.create_tab();
+        if state.tabs.is_empty() {
+            eprintln!("aeternus: não foi possível abrir o shell");
+            std::process::exit(1);
+        }
+        state.window.request_redraw();
+        state
+    }
+    fn term(&self) -> Arc<Mutex<Term>> {
+        self.tabs[self.active].term.clone()
+    }
+    fn write(&mut self, bytes: &[u8]) {
+        let _ = self.tabs[self.active].pty.writer.lock().unwrap().write_all(bytes);
+    }
+    fn aet_handle(&mut self, cmd: AetCmd) -> Result<(), String> {
+        match cmd {
+            AetCmd::Version => {
+                let term = self.term();
+                let mut t = term.lock().unwrap();
+                t.scroll_to_bottom();
+                t.selection_clear();
+                Parser::new().advance(&mut *t, b"aeternus 1.4.0\r\n");
+                drop(t);
+                self.window.request_redraw();
+                Ok(())
+            }
+            AetCmd::Pref => {
+                self.run_action(Action::Settings);
+                Ok(())
+            }
+            AetCmd::Reload => {
+                self.run_action(Action::Reload);
+                Ok(())
+            }
         }
     }
-
-    fn write(&mut self, bytes: &[u8]) {
-        let _ = self.pty.writer.lock().unwrap().write_all(bytes);
+    fn kill_all(&mut self) {
+        for tab in &mut self.tabs {
+            let _ = tab.pty.child.kill();
+        }
     }
-
+    fn sync_tabs(&mut self) {
+        let mut list = Vec::new();
+        for (i, tab) in self.tabs.iter().enumerate() {
+            let title = tab.term.lock().unwrap().title.clone();
+            let label = if title.trim().is_empty() { format!("Shell {}", i + 1) } else { title };
+            list.push((tab.id, label));
+        }
+        let active_id = self.tabs[self.active].id;
+        if self.renderer.set_tabs(&list, active_id) {
+            self.resize_active();
+        }
+    }
+    fn create_tab(&mut self) {
+        let (cols, rows) = self.renderer.grid_size();
+        let shell = resolve_shell(&self.cfg);
+        match Pty::spawn(&shell, &self.cfg.terminal.working_directory, cols as u16, rows as u16) {
+            Ok((pty, reader)) => {
+                let mut t = Term::new(cols, rows);
+                t.apply_config(&self.cfg);
+                let term = Arc::new(Mutex::new(t));
+                let id = self.next_id;
+                self.next_id += 1;
+                let dirty = Arc::new(AtomicBool::new(false));
+                let want_lock = Arc::new(AtomicBool::new(false));
+                let writer = pty.writer.clone();
+                let proxy = self.proxy.clone();
+                let (t2, d2, w2) = (term.clone(), dirty.clone(), want_lock.clone());
+                thread::spawn(move || reader_loop(id, reader, t2, writer, d2, w2, proxy));
+                self.tabs.push(Tab { id, term, pty, dirty, want_lock });
+                self.active = self.tabs.len() - 1;
+                self.sync_tabs();
+                self.renderer.ensure_tab_visible(id);
+                self.window.request_redraw();
+            }
+            Err(e) => {
+                config::report_error(&format!("aeternus: erro ao criar aba: {e}"));
+            }
+        }
+    }
+    fn close_tab(&mut self, id: u64) {
+        let Some(idx) = self.tabs.iter().position(|t| t.id == id) else { return };
+        let mut tab = self.tabs.remove(idx);
+        let _ = tab.pty.child.kill();
+        if self.tabs.is_empty() {
+            std::process::exit(0);
+        }
+        if idx < self.active {
+            self.active -= 1;
+        }
+        self.active = self.active.min(self.tabs.len() - 1);
+        self.selecting = false;
+        self.sync_tabs();
+        let id = self.tabs[self.active].id;
+        self.renderer.ensure_tab_visible(id);
+        self.window.request_redraw();
+    }
+    fn switch_tab(&mut self, idx: usize) {
+        if idx >= self.tabs.len() || idx == self.active {
+            return;
+        }
+        self.active = idx;
+        self.selecting = false;
+        self.reset_blink();
+        self.sync_tabs();
+        let id = self.tabs[self.active].id;
+        self.renderer.ensure_tab_visible(id);
+        self.resize_active();
+        self.window.request_redraw();
+    }
+    fn switch_tab_by_id(&mut self, id: u64) {
+        if let Some(idx) = self.tabs.iter().position(|t| t.id == id) {
+            self.switch_tab(idx);
+        }
+    }
+    fn cycle_tab(&mut self, dir: isize) {
+        if self.tabs.is_empty() {
+            return;
+        }
+        let n = self.tabs.len() as isize;
+        let next = (self.active as isize + dir).rem_euclid(n) as usize;
+        self.switch_tab(next);
+    }
+    fn resize_active(&mut self) {
+        let (cols, rows) = self.renderer.grid_size();
+        let Some(tab) = self.tabs.get_mut(self.active) else { return };
+        let mut t = tab.term.lock().unwrap();
+        if cols != t.cols() || rows != t.rows() {
+            t.resize(cols, rows);
+            tab.pty.resize(cols as u16, rows as u16);
+        }
+    }
     fn reset_blink(&mut self) {
         self.blink_on = true;
         self.last_blink = Instant::now();
     }
-
     fn resize(&mut self, size: PhysicalSize<u32>) {
         if size.width == 0 || size.height == 0 {
             return;
         }
+        self.renderer.set_open_menu(None);
+        self.renderer.set_hover_item(None);
+        self.renderer.close_settings();
         self.renderer.resize(size.width, size.height);
-        let (cols, rows) = self.renderer.grid_size();
-        {
-            let mut t = self.term.lock().unwrap();
-            if cols != t.cols() || rows != t.rows() {
-                t.resize(cols, rows);
-                self.pty.resize(cols as u16, rows as u16);
-            }
-        }
+        self.resize_active();
         self.window.request_redraw();
     }
-
     fn set_zoom(&mut self, z: f32) {
         self.renderer.set_zoom(z);
         let size = self.window.inner_size();
         self.resize(size);
     }
-
-    /// Relê o config.toml e aplica fonte, cores, padding, cursor e scrollback.
-    /// Tamanho inicial da janela e shell só valem ao abrir. Com erro, mantém a config atual.
     fn reload_config(&mut self) {
         match config::load() {
             Ok(cfg) => {
+                self.cfg = cfg.clone();
                 self.renderer.apply_config(&cfg);
-                self.term.lock().unwrap().apply_config(&cfg);
+                for tab in &self.tabs {
+                    tab.term.lock().unwrap().apply_config(&cfg);
+                }
                 self.keymap = cfg.keymap;
                 let size = self.window.inner_size();
                 self.resize(size);
@@ -233,52 +471,49 @@ impl State {
         }
         self.window.request_redraw();
     }
-
-    #[cfg_attr(windows, allow(unused_variables))]
+    fn settings_save(&mut self) {
+        let mut cfg = self.cfg.clone();
+        self.renderer.settings_writeback(&mut cfg);
+        match config::save(&cfg) {
+            Ok(()) => {
+                self.cfg = cfg;
+                self.config_mtime = config::mtime();
+                self.reload_config();
+            }
+            Err(e) => {
+                config::report_error(&format!("aeternus: erro ao salvar config: {e}"));
+            }
+        }
+        self.renderer.close_settings();
+        self.window.request_redraw();
+    }
     fn copy_selection(&mut self, kind: ClipKind) {
-        let text = self.term.lock().unwrap().selection_text();
+        let text = self.term().lock().unwrap().selection_text();
         if let (Some(text), Some(cb)) = (text, self.clipboard.as_mut()) {
             if !text.is_empty() {
-                #[cfg(unix)]
                 let _ = cb.set().clipboard(kind).text(text);
-                #[cfg(windows)]
-                let _ = cb.set_text(text);
             }
         }
     }
-    
-    #[cfg_attr(windows, allow(unused_variables))]
     fn osc52_copy(&mut self, kind: u8, text: String) {
         if text.is_empty() {
             return;
         }
         let Some(cb) = self.clipboard.as_mut() else { return };
-        #[cfg(unix)]
-        {
-            let target = if kind == b'p' { LinuxClipboardKind::Primary } else { LinuxClipboardKind::Clipboard };
-            let _ = cb.set().clipboard(target).text(text);
-        }
-        #[cfg(windows)]
-        let _ = cb.set_text(text);
+        let target = if kind == b'p' { LinuxClipboardKind::Primary } else { LinuxClipboardKind::Clipboard };
+        let _ = cb.set().clipboard(target).text(text);
     }
-
-    #[cfg_attr(windows, allow(unused_variables))]
     fn paste(&mut self, kind: ClipKind) {
         let bracketed = {
-            let mut t = self.term.lock().unwrap();
+            let term = self.term();
+            let mut t = term.lock().unwrap();
             t.scroll_to_bottom();
             t.selection_clear();
             t.bracketed_paste
         };
         let clean = {
             let Some(cb) = self.clipboard.as_mut() else { return };
-            #[cfg(unix)]
             let text = match cb.get().clipboard(kind).text() {
-                Ok(t) => t,
-                Err(_) => return,
-            };
-            #[cfg(windows)]
-            let text = match cb.get_text() {
                 Ok(t) => t,
                 Err(_) => return,
             };
@@ -296,22 +531,35 @@ impl State {
         self.write(&data);
         self.window.request_redraw();
     }
-
-
     fn key_input(&mut self, event: &KeyEvent, mods: ModifiersState) {
         if event.state != ElementState::Pressed {
             return;
         }
-
+        if self.renderer.settings_open() {
+            if let Key::Named(NamedKey::Escape) = &event.logical_key {
+                self.renderer.close_settings();
+            } else {
+                self.renderer.settings_key(event, mods);
+            }
+            self.window.request_redraw();
+            return;
+        }
+        if self.renderer.menu_open().is_some() {
+            if let Key::Named(NamedKey::Escape) = &event.logical_key {
+                self.close_menus();
+                self.window.request_redraw();
+            }
+            return;
+        }
         if mods.control_key() && !mods.shift_key() && !mods.alt_key() && !mods.super_key() {
             if let Key::Character(c) = &event.logical_key {
                 match c.as_str().to_lowercase().as_str() {
                     "c" => {
                         let has_selection =
-                            self.term.lock().unwrap().selection_bounds().is_some();
+                            self.term().lock().unwrap().selection_bounds().is_some();
                         if has_selection {
                             self.copy_selection(ClipKind::Clipboard);
-                            self.term.lock().unwrap().selection_clear();
+                            self.term().lock().unwrap().selection_clear();
                             self.window.request_redraw();
                             return;
                         }
@@ -324,16 +572,101 @@ impl State {
                 }
             }
         }
-
         if let Some(action) =
             self.keymap.0.iter().find(|(c, _)| combo_matches(c, event, mods)).map(|(_, a)| *a)
         {
-            self.run_action(action);
+            self.run_key_action(action);
             return;
         }
-
-        let mut t = self.term.lock().unwrap();
-
+        if mods.control_key() && mods.shift_key() {
+            if let Key::Character(c) = &event.logical_key {
+                match c.as_str().to_lowercase().as_str() {
+                    "c" => {
+                        self.copy_selection(ClipKind::Clipboard);
+                        return;
+                    }
+                    "v" => {
+                        self.paste(ClipKind::Clipboard);
+                        return;
+                    }
+                    "t" => {
+                        self.create_tab();
+                        return;
+                    }
+                    "w" => {
+                        let id = self.tabs[self.active].id;
+                        self.close_tab(id);
+                        return;
+                    }
+                    "r" => {
+                        self.reload_config();
+                        return;
+                    }
+                    "+" | "=" => {
+                        self.set_zoom(self.renderer.zoom() + 0.1);
+                        return;
+                    }
+                    "-" | "_" => {
+                        self.set_zoom(self.renderer.zoom() - 0.1);
+                        return;
+                    }
+                    "0" | ")" => {
+                        self.set_zoom(1.0);
+                        return;
+                    }
+                    _ => {}
+                }
+            }
+        }
+        if mods.shift_key() && event.logical_key == Key::Named(NamedKey::Insert) {
+            self.paste(ClipKind::Primary);
+            return;
+        }
+        if mods.control_key() && !mods.alt_key() && !mods.super_key() {
+            if event.logical_key == Key::Named(NamedKey::Tab) {
+                self.cycle_tab(if mods.shift_key() { -1 } else { 1 });
+                return;
+            }
+            if !mods.shift_key() {
+                match &event.logical_key {
+                    Key::Named(NamedKey::PageUp) => {
+                        self.cycle_tab(-1);
+                        return;
+                    }
+                    Key::Named(NamedKey::PageDown) => {
+                        self.cycle_tab(1);
+                        return;
+                    }
+                    _ => {}
+                }
+            }
+        }
+        if !mods.control_key()
+            && !mods.alt_key()
+            && !mods.super_key()
+            && event.logical_key == Key::Named(NamedKey::F11)
+        {
+            self.run_action(Action::Fullscreen);
+            return;
+        }
+        let term = self.term();
+        let mut t = term.lock().unwrap();
+        if mods.shift_key() && !mods.control_key() && !t.is_alt_screen() {
+            let page = t.rows() as isize - 1;
+            let delta = match &event.logical_key {
+                Key::Named(NamedKey::PageUp) => Some(page),
+                Key::Named(NamedKey::PageDown) => Some(-page),
+                Key::Named(NamedKey::Home) => Some(isize::MAX),
+                Key::Named(NamedKey::End) => Some(isize::MIN),
+                _ => None,
+            };
+            if let Some(d) = delta {
+                if t.scroll_display(d) {
+                    self.window.request_redraw();
+                }
+                return;
+            }
+        }
         if let Some(bytes) = key_bytes(event, mods, t.app_cursor_keys, t.app_keypad) {
             t.scroll_to_bottom();
             t.selection_clear();
@@ -343,48 +676,115 @@ impl State {
             self.window.request_redraw();
         }
     }
-
-    fn run_action(&mut self, action: Action) {
-        match action {
-            Action::Copy => self.copy_selection(ClipKind::Clipboard),
-            Action::Paste => self.paste(ClipKind::Clipboard),
-            Action::PastePrimary => self.paste(ClipKind::Primary),
-            Action::ReloadConfig => self.reload_config(),
-            Action::ZoomIn => self.set_zoom(self.renderer.zoom() + 0.1),
-            Action::ZoomOut => self.set_zoom(self.renderer.zoom() - 0.1),
-            Action::ZoomReset => self.set_zoom(1.0),
-            Action::ScrollPageUp
-            | Action::ScrollPageDown
-            | Action::ScrollToTop
-            | Action::ScrollToBottom => {
-                let mut t = self.term.lock().unwrap();
+    fn run_key_action(&mut self, action: KeyAction) {
+        let a = match action {
+            KeyAction::Copy => Action::Copy,
+            KeyAction::Paste => Action::Paste,
+            KeyAction::PastePrimary => Action::PastePrimary,
+            KeyAction::ReloadConfig => Action::Reload,
+            KeyAction::ZoomIn => Action::ZoomIn,
+            KeyAction::ZoomOut => Action::ZoomOut,
+            KeyAction::ZoomReset => Action::ZoomReset,
+            KeyAction::ScrollPageUp
+            | KeyAction::ScrollPageDown
+            | KeyAction::ScrollToTop
+            | KeyAction::ScrollToBottom => {
+                let term = self.term();
+                let mut t = term.lock().unwrap();
                 if t.is_alt_screen() {
                     return;
                 }
                 let page = t.rows() as isize - 1;
                 let delta = match action {
-                    Action::ScrollPageUp => page,
-                    Action::ScrollPageDown => -page,
-                    Action::ScrollToTop => isize::MAX,
+                    KeyAction::ScrollPageUp => page,
+                    KeyAction::ScrollPageDown => -page,
+                    KeyAction::ScrollToTop => isize::MAX,
                     _ => isize::MIN,
                 };
                 if t.scroll_display(delta) {
                     drop(t);
                     self.window.request_redraw();
                 }
+                return;
             }
-        }
+        };
+        self.run_action(a);
     }
-
-
     fn mouse_input(&mut self, st: ElementState, button: MouseButton, mods: ModifiersState) {
         let pressed = st == ElementState::Pressed;
+        let (mx, my) = self.mouse_pos;
+        if self.renderer.settings_open() {
+            if pressed && button == MouseButton::Left {
+                match self.renderer.settings_click(mx, my) {
+                    Some(SettingsOutcome::Saved) => self.settings_save(),
+                    Some(SettingsOutcome::Cancelled) => {
+                        self.renderer.close_settings();
+                        self.window.request_redraw();
+                    }
+                    None => self.window.request_redraw(),
+                }
+            } else if !pressed && button == MouseButton::Left {
+                if self.renderer.picker_release() {
+                    self.window.request_redraw();
+                }
+            }
+            return;
+        }
+        if self.renderer.menu_open().is_some() {
+            if pressed && button == MouseButton::Left {
+                self.menu_click(mx, my);
+            }
+            return;
+        }
+        if pressed && button == MouseButton::Left && self.renderer.hit_gear(mx, my) {
+            self.renderer.open_settings(&self.cfg);
+            self.window.request_redraw();
+            return;
+        }
+        if pressed && self.renderer.tabs_visible() {
+            if let Some(id) = self.renderer.hit_tab_close(mx, my) {
+                if button == MouseButton::Left || button == MouseButton::Middle {
+                    self.close_tab(id);
+                    return;
+                }
+            } else if button == MouseButton::Middle {
+                if let Some(id) = self.renderer.hit_tab(mx, my) {
+                    self.close_tab(id);
+                    return;
+                }
+            } else if button == MouseButton::Left {
+                if self.renderer.hit_tab_prev(mx, my) {
+                    if self.renderer.tab_strip_scroll(-1) {
+                        self.window.request_redraw();
+                    }
+                    return;
+                }
+                if self.renderer.hit_tab_next(mx, my) {
+                    if self.renderer.tab_strip_scroll(1) {
+                        self.window.request_redraw();
+                    }
+                    return;
+                }
+                if self.renderer.hit_new_tab(mx, my) {
+                    self.create_tab();
+                    return;
+                }
+                if let Some(id) = self.renderer.hit_tab(mx, my) {
+                    self.switch_tab_by_id(id);
+                    return;
+                }
+            }
+        }
+        if my <= self.renderer.top_inset() as f64 {
+            if pressed && button == MouseButton::Left && my < self.renderer.toolbar_h() as f64 {
+                self.menu_click(mx, my);
+            }
+            return;
+        }
         let (row, col) = self.mouse_cell;
-
-        let mode = self.term.lock().unwrap().mouse_mode;
+        let mode = self.term().lock().unwrap().mouse_mode;
         let reporting = (mode != MouseMode::Off && !mods.shift_key())
             || (!pressed && self.report_button.is_some());
-
         if reporting {
             let code = match button {
                 MouseButton::Left => 0,
@@ -393,7 +793,8 @@ impl State {
                 _ => return,
             };
             let bytes = {
-                let t = self.term.lock().unwrap();
+                let term = self.term();
+                let t = term.lock().unwrap();
                 mouse_report(&t, code, row, col, !pressed, false, mods)
             };
             self.report_button = if pressed { Some(code) } else { None };
@@ -403,7 +804,6 @@ impl State {
             }
             return;
         }
-
         match (button, pressed) {
             (MouseButton::Left, true) => {
                 let now = Instant::now();
@@ -421,21 +821,21 @@ impl State {
                     3 => SelMode::Line,
                     _ => SelMode::Simple,
                 };
-                self.term.lock().unwrap().selection_start(row, col, sel_mode);
+                self.term().lock().unwrap().selection_start(row, col, sel_mode);
                 self.selecting = true;
                 self.window.request_redraw();
             }
             (MouseButton::Left, false) => {
                 self.selecting = false;
                 let has = {
-                    let mut t = self.term.lock().unwrap();
+                    let term = self.term();
+                    let mut t = term.lock().unwrap();
                     let has = t.selection_bounds().is_some();
                     if !has {
                         t.selection_clear();
                     }
                     has
                 };
-                #[cfg(not(windows))]
                 if has {
                     self.copy_selection(ClipKind::Primary);
                 }
@@ -445,15 +845,179 @@ impl State {
             _ => {}
         }
     }
-
+    fn menu_click(&mut self, mx: f64, my: f64) {
+        if let Some(m) = self.renderer.menu_open() {
+            if let Some(i) = self.renderer.hit_item_index(mx, my) {
+                let action = self.renderer.item_action(m, i);
+                self.close_menus();
+                if let Some(a) = action {
+                    self.run_action(a);
+                }
+                return;
+            }
+            if let Some(t) = self.renderer.hit_title(mx, my) {
+                let next = if t == m { None } else { Some(t) };
+                self.close_menus();
+                if let Some(n) = next {
+                    self.renderer.set_open_menu(Some(n));
+                }
+                self.window.request_redraw();
+                return;
+            }
+            self.close_menus();
+            return;
+        }
+        if let Some(t) = self.renderer.hit_title(mx, my) {
+            self.renderer.set_hover_title(Some(t));
+            self.renderer.set_open_menu(Some(t));
+            self.window.request_redraw();
+        }
+    }
+    fn close_menus(&mut self) {
+        self.renderer.set_open_menu(None);
+        self.renderer.set_hover_item(None);
+        self.renderer.set_hover_title(None);
+        self.window.request_redraw();
+    }
+    fn run_action(&mut self, action: Action) {
+        match action {
+            Action::Copy => self.copy_selection(ClipKind::Clipboard),
+            Action::Paste => self.paste(ClipKind::Clipboard),
+            Action::PastePrimary => self.paste(ClipKind::Primary),
+            Action::SelectAll => {
+                self.term().lock().unwrap().selection_select_all();
+            }
+            Action::ZoomIn => self.set_zoom(self.renderer.zoom() + 0.1),
+            Action::ZoomOut => self.set_zoom(self.renderer.zoom() - 0.1),
+            Action::ZoomReset => self.set_zoom(1.0),
+            Action::ScrollTop => {
+                self.term().lock().unwrap().scroll_display(isize::MAX);
+            }
+            Action::ScrollBottom => {
+                self.term().lock().unwrap().scroll_display(isize::MIN);
+            }
+            Action::ResetTerm => {
+                self.term().lock().unwrap().reset();
+            }
+            Action::Reload => self.reload_config(),
+            Action::Settings => {
+                self.renderer.open_settings(&self.cfg);
+            }
+            Action::Quit => {
+                if let Some((s, l)) = &self.sock {
+                    aet_cleanup(s, l);
+                }
+                self.kill_all();
+                std::process::exit(0);
+            }
+            Action::NewTab => self.create_tab(),
+            Action::CloseTab => {
+                let id = self.tabs[self.active].id;
+                self.close_tab(id);
+            }
+            Action::Fullscreen => {
+                let on = self.window.fullscreen().is_some();
+                self.window.set_fullscreen(if on {
+                    None
+                } else {
+                    Some(Fullscreen::Borderless(None))
+                });
+            }
+            Action::About => {
+                let term = self.term();
+                let mut t = term.lock().unwrap();
+                t.scroll_to_bottom();
+                t.selection_clear();
+                let art = about_art();
+                Parser::new().advance(&mut *t, art.as_bytes());
+                drop(t);
+                self.write(b"\n");
+            }
+        }
+        self.window.request_redraw();
+    }
     fn cursor_moved(&mut self, x: f64, y: f64, mods: ModifiersState) {
         self.mouse_pos = (x, y);
+        if self.renderer.settings_open() {
+            self.window.set_cursor(CursorIcon::Default);
+            if self.renderer.settings_move(x, y) {
+                self.window.request_redraw();
+            }
+            return;
+        }
+        if self.renderer.menu_open().is_some() {
+            if y <= self.renderer.top_inset() as f64 {
+                if let Some(t) = self.renderer.hit_title(x, y) {
+                    if t != self.renderer.menu_open().unwrap() {
+                        self.renderer.set_hover_item(None);
+                        self.renderer.set_open_menu(Some(t));
+                        self.window.request_redraw();
+                    }
+                }
+            } else if let Some(i) = self.renderer.hit_item_index(x, y) {
+                if self.renderer.set_hover_item(Some(i)) {
+                    self.window.request_redraw();
+                }
+            } else if self.renderer.set_hover_item(None) {
+                self.window.request_redraw();
+            }
+            self.window.set_cursor(CursorIcon::Default);
+            return;
+        }
+        if y <= self.renderer.top_inset() as f64 {
+            if y >= self.renderer.toolbar_h() as f64 && self.renderer.tabs_visible() {
+                let c = self.renderer.hit_tab_close(x, y);
+                let t = if c.is_none() { self.renderer.hit_tab(x, y) } else { None };
+                let n = self.renderer.hit_new_tab(x, y);
+                let p = self.renderer.hit_tab_prev(x, y);
+                let nx = self.renderer.hit_tab_next(x, y);
+                let mut changed = self.renderer.set_hover_tab(t);
+                changed |= self.renderer.set_hover_close(c);
+                changed |= self.renderer.set_hover_new(n);
+                changed |= self.renderer.set_hover_prev(p);
+                changed |= self.renderer.set_hover_next(nx);
+                changed |= self.renderer.set_hover_gear(false);
+                changed |= self.renderer.set_hover_title(None);
+                if changed {
+                    self.window.request_redraw();
+                }
+                self.window.set_cursor(
+                    if t.is_some() || n || c.is_some() || p || nx {
+                        CursorIcon::Pointer
+                    } else {
+                        CursorIcon::Default
+                    },
+                );
+                return;
+            }
+            let g = self.renderer.hit_gear(x, y);
+            let mut changed = self.renderer.set_hover_gear(g);
+            changed |= self.renderer.set_hover_new(false);
+            changed |= self.renderer.set_hover_prev(false);
+            changed |= self.renderer.set_hover_next(false);
+            changed |= self.renderer.set_hover_tab(None);
+            changed |= self.renderer.set_hover_close(None);
+            let t = self.renderer.hit_title(x, y);
+            changed |= self.renderer.set_hover_title(t);
+            if changed {
+                self.window.request_redraw();
+            }
+            self.window
+                .set_cursor(if t.is_some() || g { CursorIcon::Pointer } else { CursorIcon::Default });
+            return;
+        }
+        let mut ui_clear = self.renderer.set_hover_title(None);
+        ui_clear |= self.renderer.set_hover_item(None);
+        ui_clear |= self.renderer.clear_hover();
+        if ui_clear {
+            self.window.set_cursor(CursorIcon::Text);
+            self.window.request_redraw();
+        }
         let cell = self.renderer.cell_at(x, y);
         let changed = cell != self.mouse_cell;
         self.mouse_cell = cell;
         let (row, col) = cell;
-
-        let mode = self.term.lock().unwrap().mouse_mode;
+        let mode = self.term().lock().unwrap().mouse_mode;
         if (mode != MouseMode::Off && !mods.shift_key()) || self.report_button.is_some() {
             if !changed {
                 return;
@@ -468,7 +1032,8 @@ impl State {
             }
             let btn = self.report_button.unwrap_or(3);
             let bytes = {
-                let t = self.term.lock().unwrap();
+                let term = self.term();
+                let t = term.lock().unwrap();
                 mouse_report(&t, btn, row, col, false, true, mods)
             };
             if let Some(b) = bytes {
@@ -476,11 +1041,11 @@ impl State {
             }
             return;
         }
-
         if self.selecting {
             let h = self.window.inner_size().height as f64;
             let pad = self.renderer.pad() as f64;
-            let mut t = self.term.lock().unwrap();
+            let term = self.term();
+            let mut t = term.lock().unwrap();
             if y < pad {
                 t.scroll_display(1);
             } else if y > h - pad {
@@ -491,13 +1056,16 @@ impl State {
             self.window.request_redraw();
         }
     }
-
     fn wheel(&mut self, delta: MouseScrollDelta, mods: ModifiersState) {
         let lines = match delta {
             MouseScrollDelta::LineDelta(_, y) => y * 3.0,
             MouseScrollDelta::PixelDelta(p) => p.y as f32 / self.renderer.cell_h,
         };
-
+        if self.renderer.settings_open() {
+            self.renderer.settings_scroll(-lines);
+            self.window.request_redraw();
+            return;
+        }
         if mods.control_key() {
             if lines != 0.0 {
                 let z = self.renderer.zoom() + 0.1 * lines.signum();
@@ -505,7 +1073,6 @@ impl State {
             }
             return;
         }
-
         self.scroll_accum += lines;
         let whole = self.scroll_accum.trunc();
         if whole == 0.0 {
@@ -513,19 +1080,26 @@ impl State {
         }
         self.scroll_accum -= whole;
         let n = whole as isize;
+        let (mx, my) = self.mouse_pos;
+        if self.renderer.tab_strip_hit(mx, my) {
+            if self.renderer.tab_strip_scroll(-n) {
+                self.window.request_redraw();
+            }
+            return;
+        }
         let count = n.unsigned_abs().min(30);
         let (row, col) = self.mouse_cell;
-
         let (mode, alt, app_cursor, alt_scroll) = {
-            let t = self.term.lock().unwrap();
+            let term = self.term();
+            let t = term.lock().unwrap();
             (t.mouse_mode, t.is_alt_screen(), t.app_cursor_keys, t.alt_scroll)
         };
-
         if mode != MouseMode::Off && !mods.shift_key() {
             let code = if n > 0 { 64 } else { 65 };
             let mut out = Vec::new();
             {
-                let t = self.term.lock().unwrap();
+                let term = self.term();
+                let t = term.lock().unwrap();
                 for _ in 0..count {
                     if let Some(b) = mouse_report(&t, code, row, col, false, false, mods) {
                         out.extend_from_slice(&b);
@@ -541,52 +1115,66 @@ impl State {
                 out.extend_from_slice(&seq);
             }
             self.write(&out);
-        } else if self.term.lock().unwrap().scroll_display(n) {
+        } else if self.term().lock().unwrap().scroll_display(n) {
             self.window.request_redraw();
         }
     }
-
     fn focus_changed(&mut self, focused: bool) {
         self.focused = focused;
         self.reset_blink();
-        let report = self.term.lock().unwrap().focus_reporting;
+        let report = self.term().lock().unwrap().focus_reporting;
         if report {
             self.write(if focused { b"\x1b[I" } else { b"\x1b[O" });
         }
         self.window.request_redraw();
     }
 }
-
 struct App {
     proxy: EventLoopProxy<UserEvent>,
     state: Option<State>,
     mods: ModifiersState,
+    sock: Option<(PathBuf, PathBuf)>,
 }
-
 impl ApplicationHandler<UserEvent> for App {
     fn resumed(&mut self, el: &ActiveEventLoop) {
         if self.state.is_none() {
-            self.state = Some(State::new(el, self.proxy.clone()));
+            let mut s = State::new(el, self.proxy.clone());
+            s.sock = self.sock.clone();
+            self.state = Some(s);
         }
     }
-
     fn user_event(&mut self, _el: &ActiveEventLoop, ev: UserEvent) {
         match ev {
-            UserEvent::Wakeup => {
+            UserEvent::Wakeup(id) => {
                 if let Some(s) = &self.state {
-                    s.window.request_redraw();
+                    if s.tabs.get(s.active).map_or(false, |t| t.id == id) {
+                        s.window.request_redraw();
+                    }
                 }
             }
-            UserEvent::Exit => std::process::exit(0),
+            UserEvent::CloseTab(id) => {
+                if let Some(s) = self.state.as_mut() {
+                    s.close_tab(id);
+                }
+            }
+            UserEvent::Aet(cmd, mut stream) => {
+                let reply = match self.state.as_mut() {
+                    Some(s) => match s.aet_handle(cmd) {
+                        Ok(()) => String::from("ok"),
+                        Err(e) => format!("err {e}"),
+                    },
+                    None => String::from("err sem janela"),
+                };
+                let _ = stream.write_all(reply.as_bytes());
+                let _ = stream.write_all(b"\n");
+            }
         }
     }
-
-    /// Controla o piscar do cursor: acorda só quando precisa alternar.
     fn about_to_wait(&mut self, el: &ActiveEventLoop) {
         let Some(s) = self.state.as_mut() else { return };
         let now = Instant::now();
         let (blinking, sync_expired, sync_deadline) = {
-            let mut t = s.term.lock().unwrap();
+            let mut t = s.tabs[s.active].term.lock().unwrap();
             let expired = t.expire_sync(now);
             (s.focused && t.cursor_blink && t.cursor_visible, expired, t.sync_deadline())
         };
@@ -618,17 +1206,24 @@ impl ApplicationHandler<UserEvent> for App {
             s.blink_on = true;
             s.window.request_redraw();
         }
+        if let Some(end) = s.renderer.settings_anim_wake(now) {
+            s.window.request_redraw();
+            let step = (now + Duration::from_millis(16)).min(end);
+            wake = Some(wake.map_or(step, |w| w.min(step)));
+        }
         match wake {
             Some(w) => el.set_control_flow(ControlFlow::WaitUntil(w)),
             None => el.set_control_flow(ControlFlow::Wait),
         }
     }
-
     fn window_event(&mut self, _el: &ActiveEventLoop, _id: WindowId, event: WindowEvent) {
         let Some(s) = self.state.as_mut() else { return };
         match event {
             WindowEvent::CloseRequested => {
-                let _ = s.pty.child.kill();
+                if let Some((s, l)) = &self.sock {
+                    aet_cleanup(s, l);
+                }
+                s.kill_all();
                 std::process::exit(0);
             }
             WindowEvent::Resized(size) => s.resize(size),
@@ -644,15 +1239,25 @@ impl ApplicationHandler<UserEvent> for App {
                 s.cursor_moved(position.x, position.y, self.mods)
             }
             WindowEvent::MouseWheel { delta, .. } => s.wheel(delta, self.mods),
-            WindowEvent::Focused(f) => s.focus_changed(f),
+            WindowEvent::Focused(f) => {
+                if f {
+                    if let Some((sock, last)) = &self.sock {
+                        let _ = std::fs::write(last, sock.to_string_lossy().as_bytes());
+                    }
+                }
+                s.focus_changed(f);
+            }
             WindowEvent::RedrawRequested => {
-                s.dirty.store(false, Ordering::Release);
-                s.want_lock.store(true, Ordering::Relaxed);
+                s.sync_tabs();
+                let dirty = s.tabs[s.active].dirty.clone();
+                dirty.store(false, Ordering::Release);
+                let want_lock = s.tabs[s.active].want_lock.clone();
+                want_lock.store(true, Ordering::Relaxed);
                 let mut skip_draw = false;
                 let clip;
                 {
-                    let mut t = s.term.lock().unwrap();
-                    s.want_lock.store(false, Ordering::Relaxed);
+                    let mut t = s.tabs[s.active].term.lock().unwrap();
+                    want_lock.store(false, Ordering::Relaxed);
                     if !t.title.is_empty() && t.title != s.last_title {
                         s.window.set_title(&t.title);
                         s.last_title = t.title.clone();
@@ -739,9 +1344,6 @@ fn combo_matches(combo: &KeyCombo, event: &KeyEvent, mods: ModifiersState) -> bo
     }
     false
 }
-
-/// Codifica um evento de mouse para o app (SGR 1006 ou o formato X10 clássico).
-/// `button`: 0/1/2 = esquerdo/meio/direito, 3 = nenhum, 64/65 = roda cima/baixo.
 fn mouse_report(
     t: &Term,
     button: u8,
@@ -771,7 +1373,6 @@ fn mouse_report(
         Some(vec![0x1b, b'[', b'M', 32 + cb, 33 + col as u8, 33 + row as u8])
     }
 }
-
 fn key_bytes(
     ev: &KeyEvent,
     mods: ModifiersState,
@@ -784,7 +1385,6 @@ fn key_bytes(
         + 4 * mods.control_key() as u8
         + 8 * mods.super_key() as u8;
     let modified = m > 1;
-
     let csi_final = |c: u8| -> Vec<u8> {
         if modified {
             format!("\x1b[1;{}{}", m, c as char).into_bytes()
@@ -808,7 +1408,6 @@ fn key_bytes(
             vec![0x1b, b'O', c]
         }
     };
-
     let alt_only = mods.alt_key() && !mods.shift_key() && !mods.control_key() && !mods.super_key();
     if alt_only {
         match &ev.logical_key {
@@ -817,7 +1416,6 @@ fn key_bytes(
             _ => {}
         }
     }
-
     if app_keypad && !modified && ev.location == KeyLocation::Numpad {
         let code = match &ev.logical_key {
             Key::Named(NamedKey::Enter) => Some(b'M'),
@@ -838,7 +1436,6 @@ fn key_bytes(
             return Some(vec![0x1b, b'O', c]);
         }
     }
-
     if let Key::Named(n) = &ev.logical_key {
         let special = match n {
             NamedKey::ArrowUp => Some(csi_final(b'A')),
@@ -869,7 +1466,6 @@ fn key_bytes(
             return special;
         }
     }
-
     let mut out = match &ev.logical_key {
         Key::Named(n) => match n {
             NamedKey::Enter => b"\r".to_vec(),
@@ -899,7 +1495,13 @@ fn key_bytes(
     }
     Some(out)
 }
-
+fn resolve_shell(cfg: &Config) -> String {
+    if cfg.terminal.shell.trim().is_empty() {
+        std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".into())
+    } else {
+        cfg.terminal.shell.trim().to_string()
+    }
+}
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut args = std::env::args().skip(1);
     let mut run_bench = false;
@@ -927,14 +1529,28 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         bench::run_all();
         return Ok(());
     }
-
     let event_loop = EventLoop::<UserEvent>::with_user_event().build()?;
     event_loop.set_control_flow(ControlFlow::Wait);
     let mut app = App {
         proxy: event_loop.create_proxy(),
         state: None,
         mods: ModifiersState::default(),
+        sock: None,
     };
+    aet_bind(&mut app);
     event_loop.run_app(&mut app)?;
     Ok(())
+}
+
+#[cfg(test)]
+mod aet_tests {
+    use super::{parse_aet, AetCmd};
+    #[test]
+    fn parse_aet_commands() {
+        assert_eq!(parse_aet(b"version\n"), Some(AetCmd::Version));
+        assert_eq!(parse_aet(b"pref\n"), Some(AetCmd::Pref));
+        assert_eq!(parse_aet(b"reload \n"), Some(AetCmd::Reload));
+        assert_eq!(parse_aet(b"echo version\n"), None);
+        assert_eq!(parse_aet(b"\n"), None);
+    }
 }

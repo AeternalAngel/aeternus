@@ -34,33 +34,14 @@ jobs:
           S=${V%.0}
           mkdir -p dist
           tar czf "dist/aeternus-$S-linux-x86_64.tar.gz" \
-            -C target/release aeternus -C ../.. LICENSE
+            -C target/release aeternus aet -C ../.. LICENSE
       - uses: actions/upload-artifact@v4
         with:
           name: linux
           path: dist/*
 
-  windows:
-    runs-on: windows-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
-      - name: Compilar e empacotar
-        shell: bash
-        run: |
-          cargo build --release
-          V=${GITHUB_REF_NAME#v}
-          S=${V%.0}
-          mkdir -p dist
-          7z a "dist/aeternus-$S-windows-x86_64.zip" ./target/release/aeternus.exe ./LICENSE
-      - uses: actions/upload-artifact@v4
-        with:
-          name: windows
-          path: dist/*
-
   publish:
-    needs: [linux, windows]
+    needs: [linux]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/download-artifact@v4

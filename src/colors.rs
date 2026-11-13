@@ -1,9 +1,7 @@
 use crate::cell::Color;
-
 pub const DEFAULT_FG: [u8; 3] = [239, 220, 249];
 pub const DEFAULT_BG: [u8; 3] = [18, 10, 24];
 pub const DEFAULT_SELECTION: [u8; 3] = [88, 58, 126];
-
 const DEFAULT_ANSI: [[u8; 3]; 16] = [
     [69, 71, 90],
     [243, 139, 168],
@@ -22,8 +20,6 @@ const DEFAULT_ANSI: [[u8; 3]; 16] = [
     [148, 226, 213],
     [205, 214, 244],
 ];
-
-/// Cores resolvidas do tema: padrões, seleção, cursor e a paleta ANSI de 16.
 #[derive(Clone, Debug)]
 pub struct Palette {
     pub fg: [u8; 3],
@@ -32,7 +28,6 @@ pub struct Palette {
     pub cursor: [u8; 3],
     pub ansi: [[u8; 3]; 16],
 }
-
 impl Default for Palette {
     fn default() -> Self {
         Self {
@@ -44,7 +39,6 @@ impl Default for Palette {
         }
     }
 }
-
 impl Palette {
     pub fn rgb(&self, c: Color, default: [u8; 3]) -> [u8; 3] {
         match c {
@@ -53,7 +47,6 @@ impl Palette {
             Color::Rgb(r, g, b) => [r, g, b],
         }
     }
-
     fn indexed(&self, i: u8) -> [u8; 3] {
         match i {
             0..=15 => self.ansi[i as usize],
@@ -69,8 +62,6 @@ impl Palette {
         }
     }
 }
-
-/// Aceita "#rrggbb" ou "rrggbb".
 pub fn parse_hex(s: &str) -> Option<[u8; 3]> {
     let s = s.trim().trim_start_matches('#');
     if s.len() != 6 || !s.is_ascii() {

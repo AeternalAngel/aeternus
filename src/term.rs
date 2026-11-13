@@ -1,26 +1,16 @@
 use std::collections::VecDeque;
 use std::time::{Duration, Instant};
-
 use serde::Deserialize;
-
 use crate::cell::{flags, Cell, Color};
 use crate::colors::{DEFAULT_BG, DEFAULT_FG};
 use crate::config::Config;
 use crate::grid::Grid;
 use crate::parser::Perform;
-
 const SCROLLBACK_LINES: usize = 10_000;
-
 pub const SYNC_TIMEOUT: Duration = Duration::from_millis(150);
-
 const OSC52_MAX_BYTES: usize = 1 << 20;
-
-/// Flag na última célula de uma linha que continua na seguinte por quebra
-/// automática. Serve para copiar texto sem inserir '\n' falsos.
 pub const WRAPLINE: u16 = 1 << 8;
-
 pub const WIDE_SPACER: u16 = 1 << 9;
-
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum CursorShape {
@@ -28,7 +18,6 @@ pub enum CursorShape {
     Underline,
     Bar,
 }
-
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum MouseMode {
     Off,
@@ -36,45 +25,37 @@ pub enum MouseMode {
     Drag,
     Motion,
 }
-
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum SelMode {
     Simple,
     Word,
     Line,
 }
-
-/// Posição absoluta: `line` conta desde o início do histórico (estável ao rolar).
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct SelPoint {
     pub line: usize,
     pub col: usize,
 }
-
 #[derive(Clone, Copy, Debug)]
 struct Selection {
     anchor: SelPoint,
     head: SelPoint,
     mode: SelMode,
 }
-
 #[derive(Clone, Copy)]
 struct Pen {
     fg: Color,
     bg: Color,
     flags: u16,
 }
-
 impl Pen {
     const DEFAULT: Pen = Pen { fg: Color::Default, bg: Color::Default, flags: 0 };
 }
-
 #[derive(Clone, Copy, Default)]
 pub struct Cursor {
     pub row: usize,
     pub col: usize,
 }
-
 pub struct Term {
     pub grid: Grid,
     pub cursor: Cursor,
@@ -115,7 +96,6 @@ pub struct Term {
     pub clipboard_write: Option<(u8, String)>,
     pub osc52: bool,
 }
-
 impl Term {
     pub fn new(cols: usize, rows: usize) -> Self {
         Self {
@@ -159,9 +139,6 @@ impl Term {
             osc52: true,
         }
     }
-
-    /// Aplica a parte da configuração que vive no terminal. Chamado ao abrir
-    /// e a cada recarga (Ctrl+Shift+R).
     pub fn apply_config(&mut self, cfg: &Config) {
         self.default_fg = cfg.palette.fg;
         self.default_bg = cfg.palette.bg;
@@ -173,8 +150,6 @@ impl Term {
         self.cursor_shape = cfg.cursor.shape;
         self.cursor_blink = cfg.cursor.blink;
     }
-
-    /// Descarta as linhas mais antigas se o histórico passou do limite.
     fn trim_scrollback(&mut self) {
         while self.scrollback.len() > self.max_scrollback {
             self.scrollback.pop_front();
@@ -182,16 +157,11 @@ impl Term {
         }
         self.display_offset = self.display_offset.min(self.scrollback.len());
     }
-
     pub fn cols(&self) -> usize { self.grid.cols() }
     pub fn rows(&self) -> usize { self.grid.rows() }
-
     pub fn is_alt_screen(&self) -> bool {
         self.main_grid.is_some()
     }
-
-    /// Linha visível `r`, levando em conta a rolagem. Linhas do scrollback
-    /// podem ser mais curtas que `cols` (espaços finais são cortados).
     pub fn visible_row(&self, r: usize) -> &[Cell] {
         let sb = self.scrollback.len();
         let idx = sb.saturating_sub(self.display_offset) + r;
@@ -201,8 +171,6 @@ impl Term {
             self.grid.row(idx - sb)
         }
     }
-
-    /// Rola a visão: delta > 0 vai para o passado. Retorna true se mudou.
     pub fn scroll_display(&mut self, delta: isize) -> bool {
         if self.main_grid.is_some() {
             return false;
@@ -213,7 +181,6 @@ impl Term {
         self.display_offset = new;
         changed
     }
-
     pub fn sync_deadline(&self) -> Option<Instant> {
         if self.sync_output {
             self.sync_since.map(|t| t + SYNC_TIMEOUT)
@@ -221,7 +188,6 @@ impl Term {
             None
         }
     }
-
     pub fn expire_sync(&mut self, now: Instant) -> bool {
         match self.sync_deadline() {
             Some(d) if now >= d => {
@@ -232,19 +198,14 @@ impl Term {
             _ => false,
         }
     }
-
     pub fn scroll_to_bottom(&mut self) -> bool {
         let changed = self.display_offset != 0;
         self.display_offset = 0;
         changed
     }
-
-
-    /// Índice absoluto da linha visível `row` (não muda quando o conteúdo rola).
     pub fn abs_line(&self, row: usize) -> usize {
         self.popped + self.scrollback.len().saturating_sub(self.display_offset) + row
     }
-
     fn line_cells(&self, abs: usize) -> Option<&[Cell]> {
         let idx = abs.checked_sub(self.popped)?;
         let sb = self.scrollback.len();
@@ -256,7 +217,6 @@ impl Term {
             None
         }
     }
-
     fn snap_col(&self, row: usize, col: usize) -> usize {
         if col > 0 && self.visible_row(row).get(col).map_or(false, |c| c.flags & WIDE_SPACER != 0) {
             col - 1
@@ -264,13 +224,11 @@ impl Term {
             col
         }
     }
-
     pub fn selection_start(&mut self, row: usize, col: usize, mode: SelMode) {
         let col = self.snap_col(row, col);
         let p = SelPoint { line: self.abs_line(row), col };
         self.selection = Some(Selection { anchor: p, head: p, mode });
     }
-
     pub fn selection_update(&mut self, row: usize, col: usize) {
         let col = self.snap_col(row, col);
         let p = SelPoint { line: self.abs_line(row), col };
@@ -278,13 +236,20 @@ impl Term {
             sel.head = p;
         }
     }
-
     pub fn selection_clear(&mut self) {
         self.selection = None;
     }
-
-    /// Início e fim (inclusivos), já normalizados e com a expansão de palavra/linha.
-    /// None se não há seleção ou se é um simples clique (sem arrastar).
+    pub fn selection_select_all(&mut self) {
+        let last = SelPoint {
+            line: self.abs_line(self.rows().saturating_sub(1)),
+            col: self.cols().saturating_sub(1),
+        };
+        self.selection = Some(Selection {
+            anchor: SelPoint { line: 0, col: 0 },
+            head: last,
+            mode: SelMode::Line,
+        });
+    }
     pub fn selection_bounds(&self) -> Option<(SelPoint, SelPoint)> {
         let sel = self.selection?;
         if sel.mode == SelMode::Simple && sel.anchor == sel.head {
@@ -309,7 +274,6 @@ impl Term {
         }
         Some((a, b))
     }
-
     fn word_bounds(&self, p: SelPoint) -> (usize, usize) {
         let Some(cells) = self.line_cells(p.line) else {
             return (p.col, p.col);
@@ -327,7 +291,6 @@ impl Term {
         }
         (s, e)
     }
-
     pub fn selection_text(&self) -> Option<String> {
         let (a, b) = self.selection_bounds()?;
         let mut out = String::new();
@@ -355,8 +318,6 @@ impl Term {
         }
         Some(out)
     }
-
-
     pub fn resize(&mut self, cols: usize, rows: usize) {
         self.selection = None;
         if self.main_grid.is_some() {
@@ -380,7 +341,6 @@ impl Term {
             if shift_up > 0 {
                 self.push_scrollback(shift_up);
             }
-
             let mut g = Grid::new(cols, rows);
             for i in 0..pull {
                 if let Some(line) = self.scrollback.pop_back() {
@@ -479,8 +439,6 @@ impl Term {
         self.cursor.col = new_cursor.1;
         self.display_offset = 0;
     }
-
-    /// Representação em texto da grade, para testar sem janela.
     pub fn dump(&self) -> String {
         let mut s = String::new();
         s.push('┌');
@@ -502,12 +460,9 @@ impl Term {
         s.push('┘');
         s
     }
-
-
     fn blank(&self) -> Cell {
         Cell { bg: self.pen.bg, ..Cell::BLANK }
     }
-
     fn clear_wide_edges(&mut self, r: usize, from: usize, to: usize) {
         let b = self.blank();
         let cols = self.cols();
@@ -519,18 +474,14 @@ impl Term {
             row[to] = b;
         }
     }
-
     fn reply(&mut self, s: &str) {
         self.replies.extend_from_slice(s.as_bytes());
     }
-
     fn move_to(&mut self, row: usize, col: usize) {
         self.cursor.row = row.min(self.rows() - 1);
         self.cursor.col = col.min(self.cols() - 1);
         self.wrap_pending = false;
     }
-
-    /// Move as `n` linhas do topo da grade para o scrollback (antes de sumirem).
     fn push_scrollback(&mut self, n: usize) {
         if self.max_scrollback == 0 {
             return;
@@ -553,8 +504,6 @@ impl Term {
             self.display_offset = (self.display_offset + n).min(self.scrollback.len());
         }
     }
-
-    /// Scroll da região ativa; só vira histórico se for a tela inteira.
     fn scroll_up_region(&mut self, n: usize) {
         let (top, bottom) = (self.scroll_top, self.scroll_bottom);
         if top == 0 && bottom == self.rows() - 1 && self.main_grid.is_none() {
@@ -563,7 +512,6 @@ impl Term {
         let b = self.blank();
         self.grid.scroll_up(top, bottom, n, b);
     }
-
     fn linefeed(&mut self) {
         self.wrap_pending = false;
         if self.cursor.row == self.scroll_bottom {
@@ -572,7 +520,6 @@ impl Term {
             self.cursor.row += 1;
         }
     }
-
     fn reverse_index(&mut self) {
         self.wrap_pending = false;
         if self.cursor.row == self.scroll_top {
@@ -582,19 +529,16 @@ impl Term {
             self.cursor.row -= 1;
         }
     }
-
     fn save_cursor(&mut self) {
         self.saved = Some((self.cursor, self.pen));
     }
-
     fn restore_cursor(&mut self) {
         if let Some((c, pen)) = self.saved {
             self.pen = pen;
             self.move_to(c.row, c.col);
         }
     }
-
-    fn reset(&mut self) {
+    pub fn reset(&mut self) {
         let (c, r) = (self.cols(), self.rows());
         let title = std::mem::take(&mut self.title);
         let replies = std::mem::take(&mut self.replies);
@@ -614,7 +558,6 @@ impl Term {
         self.cursor_blink = blink;
         self.max_scrollback = max_sb;
     }
-
     fn erase_display(&mut self, mode: u16) {
         let b = self.blank();
         let (r, c) = (self.cursor.row, self.cursor.col);
@@ -646,7 +589,6 @@ impl Term {
             _ => {}
         }
     }
-
     fn erase_line(&mut self, mode: u16) {
         let b = self.blank();
         let (r, c, cols) = (self.cursor.row, self.cursor.col, self.cols());
@@ -657,7 +599,6 @@ impl Term {
             _ => {}
         }
     }
-
     fn insert_lines(&mut self, n: usize) {
         let r = self.cursor.row;
         if r >= self.scroll_top && r <= self.scroll_bottom {
@@ -667,7 +608,6 @@ impl Term {
             self.wrap_pending = false;
         }
     }
-
     fn delete_lines(&mut self, n: usize) {
         let r = self.cursor.row;
         if r >= self.scroll_top && r <= self.scroll_bottom {
@@ -677,7 +617,6 @@ impl Term {
             self.wrap_pending = false;
         }
     }
-
     fn insert_chars(&mut self, n: usize) {
         let b = self.blank();
         let (r, c, cols) = (self.cursor.row, self.cursor.col, self.cols());
@@ -694,7 +633,6 @@ impl Term {
         row.copy_within(c..cols - n, c + n);
         row[c..c + n].fill(b);
     }
-
     fn delete_chars(&mut self, n: usize) {
         let b = self.blank();
         let (r, c, cols) = (self.cursor.row, self.cursor.col, self.cols());
@@ -704,7 +642,6 @@ impl Term {
         row.copy_within(c + n..cols, c);
         row[cols - n..].fill(b);
     }
-
     fn erase_chars(&mut self, n: usize) {
         let b = self.blank();
         let (r, c, cols) = (self.cursor.row, self.cursor.col, self.cols());
@@ -712,7 +649,6 @@ impl Term {
         self.clear_wide_edges(r, c, end);
         self.grid.fill(r, c, end, b);
     }
-
     fn set_alt_screen(&mut self, on: bool, save: bool) {
         if on == self.main_grid.is_some() {
             return;
@@ -730,7 +666,6 @@ impl Term {
             if save { self.restore_cursor(); }
         }
     }
-
     fn set_mouse(&mut self, mode: MouseMode, on: bool) {
         if on {
             self.mouse_mode = mode;
@@ -738,7 +673,6 @@ impl Term {
             self.mouse_mode = MouseMode::Off;
         }
     }
-
     fn set_modes(&mut self, params: &[u16], on: bool) {
         for &m in params {
             match m {
@@ -767,7 +701,6 @@ impl Term {
             }
         }
     }
-
     fn decrqm(&mut self, mode: u16) {
         let state = match mode {
             1 => Some(self.app_cursor_keys),
@@ -793,8 +726,6 @@ impl Term {
         };
         self.reply(&format!("\x1b[?{};{}$y", mode, ps));
     }
-
-    /// DECSCUSR: `CSI Ps SP q`
     fn set_cursor_style(&mut self, n: u16) {
         let (shape, blink) = match n {
             0 => (self.default_cursor_shape, self.default_cursor_blink),
@@ -809,7 +740,6 @@ impl Term {
         self.cursor_shape = shape;
         self.cursor_blink = blink;
     }
-
     fn sgr(&mut self, params: &[u16], subs: &[bool]) {
         if params.is_empty() {
             self.pen = Pen::DEFAULT;
@@ -861,7 +791,6 @@ impl Term {
         }
     }
 }
-
 fn is_wide(c: char) -> bool {
     unicode_width::UnicodeWidthChar::width(c) == Some(2)
 }
@@ -886,7 +815,6 @@ fn wrap_logical_line(line: Vec<Cell>, cols: usize) -> Vec<Vec<Cell>> {
     }
     out
 }
-
 fn fix_wide_pairs(g: &mut Grid) {
     let cols = g.cols();
     for r in 0..g.rows() {
@@ -902,8 +830,6 @@ fn fix_wide_pairs(g: &mut Grid) {
         }
     }
 }
-
-/// 0 = espaço, 1 = separador, 2 = parte de palavra (para o clique duplo).
 fn char_kind(c: char) -> u8 {
     if c == ' ' || c == '\0' {
         0
@@ -913,7 +839,6 @@ fn char_kind(c: char) -> u8 {
         2
     }
 }
-
 fn extended_color(params: &[u16], subs: &[bool], i: &mut usize) -> Option<Color> {
     match *params.get(*i + 1)? {
         5 => {
@@ -937,7 +862,6 @@ fn extended_color(params: &[u16], subs: &[bool], i: &mut usize) -> Option<Color>
         _ => None,
     }
 }
-
 fn parse_color_spec(s: &[u8]) -> Option<[u8; 3]> {
     let s = std::str::from_utf8(s).ok()?.trim();
     if let Some(hex) = s.strip_prefix('#') {
@@ -961,7 +885,6 @@ fn parse_color_spec(s: &[u8]) -> Option<[u8; 3]> {
     }
     Some([r, g, b])
 }
-
 fn base64_decode(data: &[u8]) -> Option<Vec<u8>> {
     fn val(b: u8) -> Option<u32> {
         match b {
@@ -990,7 +913,6 @@ fn base64_decode(data: &[u8]) -> Option<Vec<u8>> {
     }
     Some(out)
 }
-
 impl Perform for Term {
     fn print(&mut self, c: char) {
         if self.wrap_pending {
@@ -1034,8 +956,6 @@ impl Perform for Term {
             self.wrap_pending = self.autowrap;
         }
     }
-
-    /// Caminho rápido: trecho contínuo de ASCII imprimível escrito em lote.
     fn print_ascii(&mut self, mut s: &[u8]) {
         let cols = self.cols();
         while !s.is_empty() {
@@ -1065,7 +985,6 @@ impl Perform for Term {
             }
         }
     }
-
     fn execute(&mut self, byte: u8) {
         match byte {
             0x08 => {
@@ -1084,7 +1003,6 @@ impl Perform for Term {
             _ => {}
         }
     }
-
     fn csi(&mut self, params: &[u16], subs: &[bool], inter: &[u8], private: Option<u8>, action: u8) {
         if !inter.is_empty() {
             match (inter, private, action) {
@@ -1106,11 +1024,10 @@ impl Perform for Term {
         };
         let first = params.first().copied().unwrap_or(0);
         let (row, col) = (self.cursor.row, self.cursor.col);
-
         match (private, action) {
             (Some(b'?'), b'h') => self.set_modes(params, true),
             (Some(b'?'), b'l') => self.set_modes(params, false),
-            (Some(b'>'), b'c') if first == 0 => self.reply("\x1b[>0;0;0c"), // Secondary DA
+            (Some(b'>'), b'c') if first == 0 => self.reply("\x1b[>0;0;0c"),
             (Some(b'>'), b'q') => {
                 self.reply(concat!("\x1bP>|aeternus ", env!("CARGO_PKG_VERSION"), "\x1b\\"))
             }
@@ -1148,11 +1065,11 @@ impl Perform for Term {
             }
             (None, b's') => self.save_cursor(),
             (None, b'u') => self.restore_cursor(),
-            (None, b'c') if first == 0 => self.reply("\x1b[?62;c"), // Primary DA
+            (None, b'c') if first == 0 => self.reply("\x1b[?62;c"),
             (None, b'n') => match first {
-                5 => self.reply("\x1b[0n"), // "estou ok"
+                5 => self.reply("\x1b[0n"),
                 6 => {
-                    let s = format!("\x1b[{};{}R", row + 1, col + 1); // posição do cursor
+                    let s = format!("\x1b[{};{}R", row + 1, col + 1);
                     self.reply(&s);
                 }
                 _ => {}
@@ -1166,7 +1083,6 @@ impl Perform for Term {
             _ => {}
         }
     }
-
     fn esc(&mut self, inter: &[u8], byte: u8) {
         if !inter.is_empty() {
             return;
@@ -1182,12 +1098,11 @@ impl Perform for Term {
             b'M' => self.reverse_index(),
             b'=' => self.app_keypad = true,
             b'>' => self.app_keypad = false,
-            b'Z' => self.reply("\x1b[?62;c"), // DECID
+            b'Z' => self.reply("\x1b[?62;c"),
             b'c' => self.reset(),
             _ => {}
         }
     }
-
     fn osc(&mut self, data: &[u8]) {
         let mut top = data.splitn(2, |&b| b == b';');
         let code = top.next().unwrap_or(&[]);
@@ -1264,17 +1179,14 @@ impl Perform for Term {
         }
     }
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::parser::Parser;
-
     fn feed(t: &mut Term, s: &str) {
         let mut p = Parser::new();
         p.advance(t, s.as_bytes());
     }
-
     #[test]
     fn scroll_region() {
         let mut t = Term::new(10, 5);
@@ -1285,7 +1197,6 @@ mod tests {
         assert!(dump.contains('b'));
         assert!(dump.contains('c'));
     }
-
     #[test]
     fn scroll_region_limits_scrollback() {
         let mut t = Term::new(10, 5);
@@ -1296,7 +1207,6 @@ mod tests {
         }
         assert!(!t.scroll_display(1));
     }
-
     #[test]
     fn erase_display_modes() {
         let mut t = Term::new(5, 3);
@@ -1307,7 +1217,6 @@ mod tests {
         assert!(dump.contains("aaaaa"));
         assert!(!dump.contains("bbbbb"));
         assert!(!dump.contains("ccccc"));
-
         let mut t2 = Term::new(5, 3);
         feed(&mut t2, "aaaaa\r\nbbbbb\r\nccccc");
         feed(&mut t2, "\x1b[2;3H");
@@ -1315,7 +1224,6 @@ mod tests {
         let dump2 = t2.dump();
         assert!(!dump2.contains("aaaaa"));
         assert!(dump2.contains("ccccc"));
-
         let mut t3 = Term::new(5, 3);
         feed(&mut t3, "aaaaa\r\nbbbbb\r\nccccc");
         feed(&mut t3, "\x1b[2J");
@@ -1324,7 +1232,6 @@ mod tests {
         assert!(!dump3.contains('b'));
         assert!(!dump3.contains('c'));
     }
-
     #[test]
     fn erase_line_modes() {
         let mut t = Term::new(5, 1);
@@ -1332,14 +1239,12 @@ mod tests {
         feed(&mut t, "\x1b[3G");
         feed(&mut t, "\x1b[0K");
         assert_eq!(t.grid.row(0).iter().map(|c| c.ch).collect::<String>(), "ab   ");
-
         let mut t2 = Term::new(5, 1);
         feed(&mut t2, "abcde");
         feed(&mut t2, "\x1b[3G");
         feed(&mut t2, "\x1b[1K");
         assert_eq!(t2.grid.row(0).iter().map(|c| c.ch).collect::<String>(), "   de");
     }
-
     #[test]
     fn wrap_sets_wrapline_and_moves_cursor() {
         let mut t = Term::new(5, 2);
@@ -1349,7 +1254,6 @@ mod tests {
         assert_eq!(t.cursor.col, 1);
         assert_eq!(t.grid.row(1)[0].ch, 'f');
     }
-
     #[test]
     fn sgr_basic_colors() {
         let mut t = Term::new(5, 1);
@@ -1358,7 +1262,6 @@ mod tests {
         assert_eq!(cell.fg, Color::Indexed(1));
         assert_eq!(cell.bg, Color::Indexed(4));
     }
-
     #[test]
     fn sgr_extended_38_48_semicolon() {
         let mut t = Term::new(5, 1);
@@ -1367,7 +1270,6 @@ mod tests {
         assert_eq!(cell.fg, Color::Rgb(10, 20, 30));
         assert_eq!(cell.bg, Color::Indexed(9));
     }
-
     #[test]
     fn sgr_extended_colon_truecolor_no_colorspace() {
         let mut t = Term::new(5, 1);
@@ -1375,7 +1277,6 @@ mod tests {
         let cell = t.grid.row(0)[0];
         assert_eq!(cell.fg, Color::Rgb(10, 20, 30));
     }
-
     #[test]
     fn sgr_extended_colon_truecolor_with_colorspace() {
         let mut t = Term::new(5, 1);
@@ -1383,7 +1284,6 @@ mod tests {
         let cell = t.grid.row(0)[0];
         assert_eq!(cell.fg, Color::Rgb(10, 20, 30));
     }
-
     #[test]
     fn sgr_colon_does_not_break_alignment() {
         let mut t = Term::new(5, 1);
@@ -1392,7 +1292,6 @@ mod tests {
         assert_eq!(cell.fg, Color::Rgb(10, 20, 30));
         assert_eq!(cell.flags & flags::BOLD, flags::BOLD);
     }
-
     #[test]
     fn sgr_58_59_ignored_without_breaking_params() {
         let mut t = Term::new(5, 1);
@@ -1402,7 +1301,6 @@ mod tests {
         assert_eq!(cell.bg, Color::Default);
         assert_eq!(cell.flags & flags::BOLD, flags::BOLD);
     }
-
     #[test]
     fn selection_basic_text() {
         let mut t = Term::new(10, 2);
@@ -1411,7 +1309,6 @@ mod tests {
         t.selection_update(0, 4);
         assert_eq!(t.selection_text(), Some("hello".to_string()));
     }
-
     #[test]
     fn wide_char_takes_two_cells() {
         let mut t = Term::new(10, 1);
@@ -1422,7 +1319,6 @@ mod tests {
         assert_eq!(t.grid.row(0)[3].flags & WIDE_SPACER, WIDE_SPACER);
         assert_eq!(t.cursor.col, 4);
     }
-
     #[test]
     fn wide_char_selection_skips_continuation() {
         let mut t = Term::new(10, 1);
@@ -1431,7 +1327,6 @@ mod tests {
         t.selection_update(0, 4);
         assert_eq!(t.selection_text(), Some("你好!".to_string()));
     }
-
     #[test]
     fn keypad_application_mode() {
         let mut t = Term::new(5, 1);
@@ -1440,7 +1335,6 @@ mod tests {
         feed(&mut t, "\x1b>");
         assert!(!t.app_keypad);
     }
-
     #[test]
     fn combining_char_does_not_advance_cursor() {
         let mut t = Term::new(10, 1);
@@ -1449,7 +1343,6 @@ mod tests {
         feed(&mut t, "\u{0301}");
         assert_eq!(t.cursor.col, col_after_e);
     }
-
     fn assert_no_half_pairs(t: &Term) {
         for r in 0..t.rows() {
             let row = t.grid.row(r);
@@ -1467,11 +1360,9 @@ mod tests {
             }
         }
     }
-
     fn row_text(t: &Term, r: usize) -> String {
         t.grid.row(r).iter().map(|c| c.ch).collect()
     }
-
     #[test]
     fn wide_overwrite_lead_clears_spacer() {
         let mut t = Term::new(6, 1);
@@ -1480,7 +1371,6 @@ mod tests {
         assert_eq!(t.grid.row(0)[1].flags & WIDE_SPACER, 0);
         assert_no_half_pairs(&t);
     }
-
     #[test]
     fn wide_overwrite_spacer_with_ascii_clears_lead() {
         let mut t = Term::new(6, 1);
@@ -1488,7 +1378,6 @@ mod tests {
         assert_eq!(row_text(&t, 0), " x好   ");
         assert_no_half_pairs(&t);
     }
-
     #[test]
     fn wide_overwrite_spacer_with_print_clears_lead() {
         let mut t = Term::new(6, 1);
@@ -1496,7 +1385,6 @@ mod tests {
         assert_eq!(row_text(&t, 0), " é好   ");
         assert_no_half_pairs(&t);
     }
-
     #[test]
     fn wide_over_offset_wide() {
         let mut t = Term::new(6, 1);
@@ -1506,20 +1394,17 @@ mod tests {
         assert_eq!(t.grid.row(0)[3].flags & WIDE_SPACER, 0);
         assert_no_half_pairs(&t);
     }
-
     #[test]
     fn wide_erase_chars_on_spacer() {
         let mut t = Term::new(6, 1);
         feed(&mut t, "你好\x1b[2G\x1b[1X");
         assert_eq!(row_text(&t, 0), "  好   ");
         assert_no_half_pairs(&t);
-
         let mut t = Term::new(6, 1);
         feed(&mut t, "你好\x1b[1G\x1b[3X");
         assert_eq!(row_text(&t, 0), "      ");
         assert_no_half_pairs(&t);
     }
-
     #[test]
     fn wide_insert_chars_on_spacer() {
         let mut t = Term::new(6, 1);
@@ -1527,7 +1412,6 @@ mod tests {
         assert_eq!(row_text(&t, 0), "   ab ");
         assert_no_half_pairs(&t);
     }
-
     #[test]
     fn wide_insert_chars_pushes_pair_off_edge() {
         let mut t = Term::new(6, 1);
@@ -1535,20 +1419,17 @@ mod tests {
         assert_eq!(row_text(&t, 0), "  abc ");
         assert_no_half_pairs(&t);
     }
-
     #[test]
     fn wide_delete_chars() {
         let mut t = Term::new(6, 1);
         feed(&mut t, "你好\x1b[2G\x1b[1P");
         assert_eq!(row_text(&t, 0), " 好    ");
         assert_no_half_pairs(&t);
-
         let mut t = Term::new(6, 1);
         feed(&mut t, "你好\x1b[1G\x1b[3P");
         assert_eq!(row_text(&t, 0), "      ");
         assert_no_half_pairs(&t);
     }
-
     #[test]
     fn wide_resize_cuts_pair() {
         let mut t = Term::new(6, 1);
@@ -1557,7 +1438,6 @@ mod tests {
         assert_eq!(row_text(&t, 0), "ab ");
         assert_eq!(row_text(&t, 1), "   ");
         assert_no_half_pairs(&t);
-
         let mut t = Term::new(6, 2);
         feed(&mut t, "\x1b[?1049hab你");
         t.resize(3, 2);

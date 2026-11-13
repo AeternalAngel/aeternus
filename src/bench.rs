@@ -1,9 +1,7 @@
 use std::hint::black_box;
 use std::time::Instant;
-
 use crate::parser::Parser;
 use crate::term::Term;
-
 fn plain(size: usize) -> Vec<u8> {
     let mut v = Vec::with_capacity(size + 128);
     let mut n = 0u64;
@@ -16,7 +14,6 @@ fn plain(size: usize) -> Vec<u8> {
     }
     v
 }
-
 fn colored(size: usize) -> Vec<u8> {
     let mut v = Vec::with_capacity(size + 256);
     let mut n = 0u32;
@@ -30,7 +27,6 @@ fn colored(size: usize) -> Vec<u8> {
     }
     v
 }
-
 fn tui(size: usize) -> Vec<u8> {
     let mut v = Vec::with_capacity(size + 4096);
     let mut frame = 0u32;
@@ -48,7 +44,6 @@ fn tui(size: usize) -> Vec<u8> {
     }
     v
 }
-
 fn run(name: &str, data: &[u8]) {
     let mut best = f64::MAX;
     for _ in 0..3 {
@@ -68,7 +63,6 @@ fn run(name: &str, data: &[u8]) {
         best * 1000.0
     );
 }
-
 pub fn run_all() {
     let size = 64 << 20;
     for (name, data) in [("plain", plain(size)), ("colored", colored(size)), ("tui", tui(size))] {

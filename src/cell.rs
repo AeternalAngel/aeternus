@@ -4,7 +4,6 @@ pub enum Color {
     Indexed(u8),
     Rgb(u8, u8, u8),
 }
-
 pub mod flags {
     pub const BOLD: u16 = 1 << 0;
     pub const DIM: u16 = 1 << 1;
@@ -15,7 +14,6 @@ pub mod flags {
     pub const HIDDEN: u16 = 1 << 6;
     pub const STRIKE: u16 = 1 << 7;
 }
-
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct Cell {
     pub ch: char,
@@ -23,7 +21,6 @@ pub struct Cell {
     pub bg: Color,
     pub flags: u16,
 }
-
 impl Cell {
     pub const BLANK: Cell = Cell {
         ch: ' ',
