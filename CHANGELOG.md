@@ -1,5 +1,21 @@
 # Changelog
 
+## 1.4
+
+### Added
+
+- Toolbar: `window.toolbar = true` shows a menu bar (Arquivo, Editar, Ver, Ajuda) below the native window frame, with a settings gear on the right that opens Preferences directly. Besides the existing actions, the menus add "Selecionar tudo", "Resetar terminal", "Tela cheia" (`F11`) and "Sobre o Aeternus".
+- Tabs: multiple shells in one window. The tab strip appears under the toolbar once there are two or more tabs, with each tab showing its own title (OSC, e.g. the shell's cwd), a close button and a `+` button for a new tab. Shortcuts: `Ctrl+Shift+T` (new tab), `Ctrl+Shift+W` (close tab), `Ctrl+Tab`/`Ctrl+Shift+Tab` and `Ctrl+PageUp`/`Ctrl+PageDown` (switch), middle-click closes a tab; the File menu also hosts "Nova aba"/"Fechar aba". Each tab keeps its own scrollback, title and PTY; the active tab is resized with the window.
+- Scrollable tab strip: when tabs don't fit, the mouse wheel over the strip scrolls it one tab at a time, `‹`/`›` buttons appear on the right edge while any tab stays hidden on either side (with hover state and a pinned `+` button) and the strip auto-follows the active tab on switch, create and close.
+- Preferences overlay with a `Simples`/`Avançado` toggle in the header. The simple mode shows only the everyday options (font, toolbar, colors); the advanced mode shows everything, grouped in labeled sections (Fonte, Janela, Terminal, Cursor, Cores) inside cards, with toggles drawn as pills whose knob slides over ~120 ms while their theme-derived colors transition. Saving writes `config.toml` and applies the changes instantly; existing comments and formatting in the file are preserved.
+- Color picker: color fields render as a swatch with the current color; clicking one opens an in-app overlay with a hue/saturation/brightness picker drawn with the renderer itself, current vs. new preview, hex and RGB readouts and Cancelar/Confirmar buttons (`Esc` cancels, `Enter` confirms). The hex field stays editable in advanced mode.
+- The `aet` companion CLI, shipped in the release archive, talks to a running instance over a Unix socket in `$XDG_RUNTIME_DIR` and targets the most recently focused instance: `aet version` prints `aeternus 1.4.0` into the active terminal (the shell prompt returns normally), `aet pref` opens Preferences and `aet reload` reloads `config.toml`. Unknown or missing arguments print a usage help.
+- "Sobre o Aeternus" prints the Aeternus ASCII art and version into the active terminal, with the prompt returning right below it. The art's accent color is derived from the configured background and its text is white on dark backgrounds and black on light ones; both are resolved every frame, so art already on screen recolors itself when the background changes.
+
+### Removed
+
+- Windows support: platform code (ConPTY-side `cmd.exe` fallback, `%APPDATA%` config path, `aeternus.log`, DWM/dark-mode helpers, `windows_subsystem`), the `cfg(windows)` dependency, CI job and release packaging are gone. Aeternus is Linux-only (Wayland/X11).
+
 ## 1.3
 
 ### Added
