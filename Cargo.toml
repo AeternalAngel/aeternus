@@ -3,7 +3,7 @@ name = "aeternus"
 description = "Emulador de terminal em Rust"
 license = "MIT"
 repository = "https://github.com/AeternalAngel/aeternus"
-version = "1.4.0"
+version = "1.4.0-pre1"
 edition = "2021"
 
 [dependencies]
