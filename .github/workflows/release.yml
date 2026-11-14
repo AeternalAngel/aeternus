@@ -25,13 +25,20 @@ jobs:
       - name: Conferir tag x Cargo.toml
         run: |
           TAG=${GITHUB_REF_NAME#v}
+          case "$TAG" in
+            [0-9][0-9]w[0-9][0-9][a-z])
+              echo "Snapshot $TAG: pulando checagem do Cargo"; exit 0 ;;
+          esac
           CARGO=$(grep -m1 '^version' Cargo.toml | cut -d'"' -f2)
           [ "$TAG" = "$CARGO" ] || { echo "Tag $TAG != Cargo.toml $CARGO"; exit 1; }
       - name: Compilar e empacotar
         run: |
           cargo build --release
           V=${GITHUB_REF_NAME#v}
-          S=${V%.0}
+          case "$V" in
+            [0-9][0-9]w[0-9][0-9][a-z]) S=$V ;;
+            *) S=$(echo "$V" | sed -E 's/^([0-9]+\.[0-9]+)\.0/\1/') ;;
+          esac
           mkdir -p dist
           tar czf "dist/aeternus-$S-linux-x86_64.tar.gz" \
             -C target/release aeternus aet -C ../.. LICENSE
@@ -48,14 +55,24 @@ jobs:
         with:
           path: dist
           merge-multiple: true
-      - name: Checksums e nome curto
+      - name: Checksums, nome curto e prerelease
         id: ver
         run: |
           cd dist && sha256sum * > SHA256SUMS
           V=${GITHUB_REF_NAME#v}
-          echo "short=${V%.0}" >> "$GITHUB_OUTPUT"
+          case "$V" in
+            [0-9][0-9]w[0-9][0-9][a-z]) S=$V ;;
+            *) S=$(echo "$V" | sed -E 's/^([0-9]+\.[0-9]+)\.0/\1/') ;;
+          esac
+          case "$V" in
+            *-pre*|[0-9][0-9]w[0-9][0-9][a-z]) PRE=true ;;
+            *) PRE=false ;;
+          esac
+          echo "short=$S" >> "$GITHUB_OUTPUT"
+          echo "pre=$PRE" >> "$GITHUB_OUTPUT"
       - uses: softprops/action-gh-release@v2
         with:
           name: Aeternus ${{ steps.ver.outputs.short }}
+          prerelease: ${{ steps.ver.outputs.pre }}
           generate_release_notes: true
           files: dist/*
