@@ -1,10 +1,18 @@
-# Aeternus
+<div align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/aeternus-white.png">
+    <source media="(prefers-color-scheme: light)" srcset="docs/aeternus-black.png">
+    <img src="docs/aeternus-white.png" alt="Aeternus" width="600">
+  </picture>
+</div>
 
 A GPU-accelerated terminal emulator written in Rust (winit + wgpu) for Linux.
 
-🇧🇷 [Leia em português](README.pt-BR.md)
+🇧🇷 [Leia em português](README.pt-BR.md) (Will be removed in future updates.)
 
-![Aeternus screenshot](docs/screenshot.png)
+<div align="center">
+  <img src="docs/terminal.png" alt="Aeternus screenshot" width="800">
+</div>
 
 > **Status:** version 1.4. Expect bugs and missing features. See [CHANGELOG](CHANGELOG.md).
 
