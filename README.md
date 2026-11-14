@@ -1,9 +1,6 @@
 <div align="center">
-  <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="docs/aeternus-white.png">
-    <source media="(prefers-color-scheme: light)" srcset="docs/aeternus-black.png">
-    <img src="docs/aeternus-white.png" alt="Aeternus" width="600">
-  </picture>
+  <img src="docs/aeternus-white.png#gh-dark-mode-only" alt="Aeternus" width="600">
+  <img src="docs/aeternus-black.png#gh-light-mode-only" alt="Aeternus" width="600">
 </div>
 
 A GPU-accelerated terminal emulator written in Rust (winit + wgpu) for Linux.
