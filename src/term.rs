@@ -1,16 +1,25 @@
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 use std::time::{Duration, Instant};
+
 use serde::Deserialize;
+
 use crate::cell::{flags, Cell, Color};
 use crate::colors::{DEFAULT_BG, DEFAULT_FG};
 use crate::config::Config;
 use crate::grid::Grid;
 use crate::parser::Perform;
+
 const SCROLLBACK_LINES: usize = 10_000;
 pub const SYNC_TIMEOUT: Duration = Duration::from_millis(150);
 const OSC52_MAX_BYTES: usize = 1 << 20;
+const MAX_INTERNED: usize = 1 << 16;
+const MAX_LINK_LEN: usize = 2048;
+const KB_STACK_MAX: usize = 16;
+pub const KB_SUPPORTED: u8 = 0b1;
 pub const WRAPLINE: u16 = 1 << 8;
 pub const WIDE_SPACER: u16 = 1 << 9;
+const ZWJ: char = '\u{200D}';
+
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum CursorShape {
@@ -42,19 +51,88 @@ struct Selection {
     head: SelPoint,
     mode: SelMode,
 }
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Charset {
+    Ascii,
+    DecGraphics,
+    Uk,
+}
 #[derive(Clone, Copy)]
 struct Pen {
     fg: Color,
     bg: Color,
     flags: u16,
+    extra: u16,
 }
 impl Pen {
-    const DEFAULT: Pen = Pen { fg: Color::Default, bg: Color::Default, flags: 0 };
+    const DEFAULT: Pen = Pen { fg: Color::Default, bg: Color::Default, flags: 0, extra: 0 };
 }
-#[derive(Clone, Copy, Default)]
+#[derive(Clone, Copy, Default, PartialEq, Eq, Debug)]
 pub struct Cursor {
     pub row: usize,
     pub col: usize,
+}
+#[derive(Clone, Copy)]
+struct SavedCursor {
+    cursor: Cursor,
+    pen: Pen,
+    charsets: [Charset; 2],
+    gl: usize,
+    origin: bool,
+    autowrap: bool,
+}
+#[derive(Default)]
+struct Extras {
+    items: Vec<(u32, u32)>,
+    ids: HashMap<(u32, u32), u16>,
+}
+impl Extras {
+    fn id(&mut self, cluster: u32, link: u32) -> u16 {
+        if cluster == 0 && link == 0 {
+            return 0;
+        }
+        if let Some(&id) = self.ids.get(&(cluster, link)) {
+            return id;
+        }
+        if self.items.len() >= u16::MAX as usize {
+            return 0;
+        }
+        self.items.push((cluster, link));
+        let id = self.items.len() as u16;
+        self.ids.insert((cluster, link), id);
+        id
+    }
+    fn get(&self, id: u16) -> (u32, u32) {
+        if id == 0 {
+            return (0, 0);
+        }
+        self.items.get(id as usize - 1).copied().unwrap_or((0, 0))
+    }
+}
+#[derive(Default)]
+struct Interner {
+    items: Vec<String>,
+    ids: HashMap<String, u32>,
+}
+impl Interner {
+    fn intern(&mut self, s: &str) -> u32 {
+        if let Some(&id) = self.ids.get(s) {
+            return id;
+        }
+        if self.items.len() >= MAX_INTERNED {
+            return 0;
+        }
+        self.items.push(s.to_string());
+        let id = self.items.len() as u32;
+        self.ids.insert(s.to_string(), id);
+        id
+    }
+    fn get(&self, id: u32) -> Option<&str> {
+        if id == 0 {
+            return None;
+        }
+        self.items.get(id as usize - 1).map(String::as_str)
+    }
 }
 pub struct Term {
     pub grid: Grid,
@@ -63,7 +141,7 @@ pub struct Term {
     scroll_top: usize,
     scroll_bottom: usize,
     wrap_pending: bool,
-    saved: Option<(Cursor, Pen)>,
+    saved: Option<SavedCursor>,
     main_grid: Option<Grid>,
     scrollback: VecDeque<Vec<Cell>>,
     max_scrollback: usize,
@@ -73,6 +151,21 @@ pub struct Term {
     default_bg: [u8; 3],
     default_cursor_shape: CursorShape,
     default_cursor_blink: bool,
+    clusters: Interner,
+    links: Interner,
+    extras: Extras,
+    charsets: [Charset; 2],
+    gl: usize,
+    tabs: Vec<bool>,
+    last_char: Option<char>,
+    join_next: bool,
+    insert_mode: bool,
+    newline_mode: bool,
+    origin_mode: bool,
+    kb_stack: Vec<u8>,
+    alt_kb: (u8, Vec<u8>),
+    pub kb_flags: u8,
+    pub cell_px: (u32, u32),
     pub display_offset: usize,
     pub replies: Vec<u8>,
     pub autowrap: bool,
@@ -87,17 +180,25 @@ pub struct Term {
     pub focus_reporting: bool,
     pub alt_scroll: bool,
     pub title: String,
+    pub cwd: Option<String>,
+    pub bell: bool,
     pub sync_output: bool,
     pub sync_since: Option<Instant>,
     pub fg_override: Option<[u8; 3]>,
     pub bg_override: Option<[u8; 3]>,
     pub cursor_override: Option<[u8; 3]>,
-    pub ansi_override: std::collections::HashMap<u8, [u8; 3]>,
+    pub ansi_override: HashMap<u8, [u8; 3]>,
+    palette_ansi: Box<[[u8; 3]; 256]>,
     pub clipboard_write: Option<(u8, String)>,
     pub osc52: bool,
 }
+fn default_tabs(cols: usize) -> Vec<bool> {
+    (0..cols).map(|c| c > 0 && c % 8 == 0).collect()
+}
 impl Term {
     pub fn new(cols: usize, rows: usize) -> Self {
+        let cols = cols.max(1);
+        let rows = rows.max(1);
         Self {
             grid: Grid::new(cols, rows),
             cursor: Cursor::default(),
@@ -115,6 +216,21 @@ impl Term {
             default_bg: DEFAULT_BG,
             default_cursor_shape: CursorShape::Block,
             default_cursor_blink: true,
+            clusters: Interner::default(),
+            links: Interner::default(),
+            extras: Extras::default(),
+            charsets: [Charset::Ascii; 2],
+            gl: 0,
+            tabs: default_tabs(cols),
+            last_char: None,
+            join_next: false,
+            insert_mode: false,
+            newline_mode: false,
+            origin_mode: false,
+            kb_stack: Vec::new(),
+            alt_kb: (0, Vec::new()),
+            kb_flags: 0,
+            cell_px: (0, 0),
             display_offset: 0,
             replies: Vec::new(),
             autowrap: true,
@@ -129,12 +245,15 @@ impl Term {
             focus_reporting: false,
             alt_scroll: true,
             title: String::new(),
+            cwd: None,
+            bell: false,
             sync_output: false,
             sync_since: None,
             fg_override: None,
             bg_override: None,
             cursor_override: None,
-            ansi_override: std::collections::HashMap::new(),
+            ansi_override: HashMap::new(),
+            palette_ansi: Box::new(crate::colors::Palette::default().ansi),
             clipboard_write: None,
             osc52: true,
         }
@@ -142,6 +261,7 @@ impl Term {
     pub fn apply_config(&mut self, cfg: &Config) {
         self.default_fg = cfg.palette.fg;
         self.default_bg = cfg.palette.bg;
+        *self.palette_ansi = cfg.palette.ansi;
         self.max_scrollback = cfg.terminal.scrollback;
         self.trim_scrollback();
         self.osc52 = cfg.terminal.osc52;
@@ -157,10 +277,20 @@ impl Term {
         }
         self.display_offset = self.display_offset.min(self.scrollback.len());
     }
-    pub fn cols(&self) -> usize { self.grid.cols() }
-    pub fn rows(&self) -> usize { self.grid.rows() }
+    pub fn cols(&self) -> usize {
+        self.grid.cols()
+    }
+    pub fn rows(&self) -> usize {
+        self.grid.rows()
+    }
     pub fn is_alt_screen(&self) -> bool {
         self.main_grid.is_some()
+    }
+    pub fn cluster(&self, cell: &Cell) -> Option<&str> {
+        self.clusters.get(self.extras.get(cell.extra).0)
+    }
+    pub fn link(&self, cell: &Cell) -> Option<&str> {
+        self.links.get(self.extras.get(cell.extra).1)
     }
     pub fn visible_row(&self, r: usize) -> &[Cell] {
         let sb = self.scrollback.len();
@@ -218,7 +348,7 @@ impl Term {
         }
     }
     fn snap_col(&self, row: usize, col: usize) -> usize {
-        if col > 0 && self.visible_row(row).get(col).map_or(false, |c| c.flags & WIDE_SPACER != 0) {
+        if col > 0 && self.visible_row(row).get(col).is_some_and(|c| c.flags & WIDE_SPACER != 0) {
             col - 1
         } else {
             col
@@ -245,7 +375,7 @@ impl Term {
             col: self.cols().saturating_sub(1),
         };
         self.selection = Some(Selection {
-            anchor: SelPoint { line: 0, col: 0 },
+            anchor: SelPoint { line: self.popped, col: 0 },
             head: last,
             mode: SelMode::Line,
         });
@@ -256,11 +386,8 @@ impl Term {
             return None;
         }
         let key = |p: SelPoint| (p.line, p.col);
-        let (mut a, mut b) = if key(sel.anchor) <= key(sel.head) {
-            (sel.anchor, sel.head)
-        } else {
-            (sel.head, sel.anchor)
-        };
+        let (mut a, mut b) =
+            if key(sel.anchor) <= key(sel.head) { (sel.anchor, sel.head) } else { (sel.head, sel.anchor) };
         match sel.mode {
             SelMode::Simple => {}
             SelMode::Word => {
@@ -300,13 +427,14 @@ impl Term {
             let end = if line == b.line { b.col.saturating_add(1) } else { usize::MAX };
             let end = end.min(cells.len());
             let start = start.min(end);
-            let wrapped =
-                line != b.line && cells.last().map_or(false, |c| c.flags & WRAPLINE != 0);
-            let mut text: String = cells[start..end]
-                .iter()
-                .filter(|c| c.flags & WIDE_SPACER == 0)
-                .map(|c| c.ch)
-                .collect();
+            let wrapped = line != b.line && cells.last().is_some_and(|c| c.flags & WRAPLINE != 0);
+            let mut text = String::new();
+            for c in cells[start..end].iter().filter(|c| c.flags & WIDE_SPACER == 0) {
+                text.push(c.ch);
+                if let Some(extra) = self.cluster(c) {
+                    text.push_str(extra);
+                }
+            }
             if !wrapped {
                 let n = text.trim_end_matches(' ').len();
                 text.truncate(n);
@@ -318,8 +446,43 @@ impl Term {
         }
         Some(out)
     }
+    pub fn link_at(&self, row: usize, col: usize) -> Option<String> {
+        let cell = self.visible_row(row).get(col)?;
+        self.link(cell).map(str::to_string)
+    }
+    pub fn url_at(&self, row: usize, col: usize) -> Option<String> {
+        if let Some(l) = self.link_at(row, col) {
+            return Some(l);
+        }
+        let mut first = row;
+        while first > 0 && self.visible_row(first - 1).last().is_some_and(|c| c.flags & WRAPLINE != 0) {
+            first -= 1;
+        }
+        let mut last = row;
+        while last + 1 < self.rows() && self.visible_row(last).last().is_some_and(|c| c.flags & WRAPLINE != 0)
+        {
+            last += 1;
+        }
+        let mut chars: Vec<char> = Vec::new();
+        let mut target = 0usize;
+        for r in first..=last {
+            for (c, cell) in self.visible_row(r).iter().enumerate() {
+                if r == row && c == col {
+                    target = chars.len();
+                }
+                if cell.flags & WIDE_SPACER != 0 {
+                    continue;
+                }
+                chars.push(cell.ch);
+            }
+        }
+        find_url(&chars, target)
+    }
     pub fn resize(&mut self, cols: usize, rows: usize) {
+        let cols = cols.max(1);
+        let rows = rows.max(1);
         self.selection = None;
+        let old_cols = self.cols();
         if self.main_grid.is_some() {
             self.grid = self.grid.resized(cols, rows);
             if let Some(g) = &mut self.main_grid {
@@ -363,6 +526,12 @@ impl Term {
         if let Some(g) = &mut self.main_grid {
             fix_wide_pairs(g);
         }
+        if cols != old_cols {
+            let defaults = default_tabs(cols);
+            self.tabs.resize(cols, false);
+            let from = old_cols.min(cols);
+            self.tabs[from..cols].copy_from_slice(&defaults[from..cols]);
+        }
         self.scroll_top = 0;
         self.scroll_bottom = rows - 1;
         self.move_to(self.cursor.row, self.cursor.col);
@@ -376,10 +545,15 @@ impl Term {
 
         let mut physical: Vec<(Vec<Cell>, bool)> = Vec::with_capacity(old_sb_len + old_rows);
         for line in self.scrollback.drain(..) {
-            let wrapped = line.last().map_or(false, |c| c.flags & WRAPLINE != 0);
+            let wrapped = line.last().is_some_and(|c| c.flags & WRAPLINE != 0);
             physical.push((line, wrapped));
         }
-        for r in 0..old_rows {
+        let last_used = (0..old_rows)
+            .rev()
+            .find(|&r| self.grid.row(r).iter().any(|c| *c != Cell::BLANK))
+            .unwrap_or(0)
+            .max(self.cursor.row);
+        for r in 0..=last_used {
             let row = self.grid.row(r);
             let wrapped = row[row.len() - 1].flags & WRAPLINE != 0;
             let len = if wrapped {
@@ -399,7 +573,10 @@ impl Term {
             if i == cursor_phys_index {
                 cursor_offset = Some(logical.len() + cursor_col);
             }
-            logical.extend(line);
+            logical.extend(line.into_iter().map(|mut c| {
+                c.flags &= !WRAPLINE;
+                c
+            }));
             if !wrapped {
                 let base = new_rows.len();
                 let chunks = wrap_logical_line(std::mem::take(&mut logical), cols);
@@ -420,10 +597,9 @@ impl Term {
 
         let total = new_rows.len();
         let grid_start = total.saturating_sub(rows);
-        let pad_top = rows - (total - grid_start);
         let mut g = Grid::new(cols, rows);
         for (i, row) in new_rows[grid_start..].iter().enumerate() {
-            g.row_mut(pad_top + i).copy_from_slice(row);
+            g.row_mut(i).copy_from_slice(row);
         }
         self.grid = g;
 
@@ -435,8 +611,8 @@ impl Term {
         self.trim_scrollback();
 
         let cur_row = new_cursor.0.max(grid_start) - grid_start;
-        self.cursor.row = pad_top + cur_row;
-        self.cursor.col = new_cursor.1;
+        self.cursor.row = cur_row.min(rows - 1);
+        self.cursor.col = new_cursor.1.min(cols - 1);
         self.display_offset = 0;
     }
     pub fn dump(&self) -> String {
@@ -482,8 +658,17 @@ impl Term {
         self.cursor.col = col.min(self.cols() - 1);
         self.wrap_pending = false;
     }
+    fn move_to_origin(&mut self, row: usize, col: usize) {
+        if self.origin_mode {
+            let r = (self.scroll_top + row).min(self.scroll_bottom);
+            self.move_to(r, col);
+        } else {
+            self.move_to(row, col);
+        }
+    }
     fn push_scrollback(&mut self, n: usize) {
         if self.max_scrollback == 0 {
+            self.popped += n;
             return;
         }
         for i in 0..n {
@@ -530,25 +715,49 @@ impl Term {
         }
     }
     fn save_cursor(&mut self) {
-        self.saved = Some((self.cursor, self.pen));
+        self.saved = Some(SavedCursor {
+            cursor: self.cursor,
+            pen: self.pen,
+            charsets: self.charsets,
+            gl: self.gl,
+            origin: self.origin_mode,
+            autowrap: self.autowrap,
+        });
     }
     fn restore_cursor(&mut self) {
-        if let Some((c, pen)) = self.saved {
-            self.pen = pen;
-            self.move_to(c.row, c.col);
+        match self.saved {
+            Some(s) => {
+                self.pen = s.pen;
+                self.charsets = s.charsets;
+                self.gl = s.gl;
+                self.origin_mode = s.origin;
+                self.autowrap = s.autowrap;
+                self.move_to(s.cursor.row, s.cursor.col);
+            }
+            None => {
+                self.pen = Pen::DEFAULT;
+                self.charsets = [Charset::Ascii; 2];
+                self.gl = 0;
+                self.origin_mode = false;
+                self.move_to(0, 0);
+            }
         }
     }
     pub fn reset(&mut self) {
         let (c, r) = (self.cols(), self.rows());
         let title = std::mem::take(&mut self.title);
+        let cwd = self.cwd.take();
         let replies = std::mem::take(&mut self.replies);
         let (fg, bg) = (self.default_fg, self.default_bg);
         let (shape, blink) = (self.default_cursor_shape, self.default_cursor_blink);
         let max_sb = self.max_scrollback;
         let osc52 = self.osc52;
+        let cell_px = self.cell_px;
+        let palette_ansi = std::mem::replace(&mut self.palette_ansi, Box::new([[0; 3]; 256]));
         *self = Term::new(c, r);
         self.osc52 = osc52;
         self.title = title;
+        self.cwd = cwd;
         self.replies = replies;
         self.default_fg = fg;
         self.default_bg = bg;
@@ -557,6 +766,8 @@ impl Term {
         self.cursor_shape = shape;
         self.cursor_blink = blink;
         self.max_scrollback = max_sb;
+        self.cell_px = cell_px;
+        self.palette_ansi = palette_ansi;
     }
     fn erase_display(&mut self, mode: u16) {
         let b = self.blank();
@@ -564,6 +775,7 @@ impl Term {
         let (cols, rows) = (self.cols(), self.rows());
         match mode {
             0 => {
+                self.clear_wide_edges(r, c, cols);
                 self.grid.fill(r, c, cols, b);
                 for i in (r + 1)..rows {
                     self.grid.fill(i, 0, cols, b);
@@ -573,7 +785,8 @@ impl Term {
                 for i in 0..r {
                     self.grid.fill(i, 0, cols, b);
                 }
-                self.grid.fill(r, 0, c + 1, b);
+                self.clear_wide_edges(r, 0, (c + 1).min(cols));
+                self.grid.fill(r, 0, (c + 1).min(cols), b);
             }
             2 => {
                 for i in 0..rows {
@@ -593,8 +806,14 @@ impl Term {
         let b = self.blank();
         let (r, c, cols) = (self.cursor.row, self.cursor.col, self.cols());
         match mode {
-            0 => self.grid.fill(r, c, cols, b),
-            1 => self.grid.fill(r, 0, c + 1, b),
+            0 => {
+                self.clear_wide_edges(r, c, cols);
+                self.grid.fill(r, c, cols, b);
+            }
+            1 => {
+                self.clear_wide_edges(r, 0, (c + 1).min(cols));
+                self.grid.fill(r, 0, (c + 1).min(cols), b);
+            }
             2 => self.grid.fill(r, 0, cols, b),
             _ => {}
         }
@@ -632,6 +851,7 @@ impl Term {
         }
         row.copy_within(c..cols - n, c + n);
         row[c..c + n].fill(b);
+        self.wrap_pending = false;
     }
     fn delete_chars(&mut self, n: usize) {
         let b = self.blank();
@@ -641,6 +861,7 @@ impl Term {
         let row = self.grid.row_mut(r);
         row.copy_within(c + n..cols, c);
         row[cols - n..].fill(b);
+        self.wrap_pending = false;
     }
     fn erase_chars(&mut self, n: usize) {
         let b = self.blank();
@@ -649,21 +870,63 @@ impl Term {
         self.clear_wide_edges(r, c, end);
         self.grid.fill(r, c, end, b);
     }
+    fn screen_alignment(&mut self) {
+        let e = Cell { ch: 'E', ..Cell::BLANK };
+        for r in 0..self.rows() {
+            self.grid.row_mut(r).fill(e);
+        }
+        self.scroll_top = 0;
+        self.scroll_bottom = self.rows() - 1;
+        self.origin_mode = false;
+        self.move_to(0, 0);
+    }
+    fn tab_forward(&mut self, n: usize) {
+        let cols = self.cols();
+        let mut col = self.cursor.col;
+        for _ in 0..n {
+            let next = (col + 1..cols).find(|&c| self.tabs.get(c).copied().unwrap_or(false));
+            col = next.unwrap_or(cols - 1);
+            if col == cols - 1 {
+                break;
+            }
+        }
+        self.cursor.col = col;
+        self.wrap_pending = false;
+    }
+    fn tab_backward(&mut self, n: usize) {
+        let mut col = self.cursor.col;
+        for _ in 0..n {
+            if col == 0 {
+                break;
+            }
+            col = (0..col).rev().find(|&c| self.tabs.get(c).copied().unwrap_or(false)).unwrap_or(0);
+        }
+        self.cursor.col = col;
+        self.wrap_pending = false;
+    }
     fn set_alt_screen(&mut self, on: bool, save: bool) {
         if on == self.main_grid.is_some() {
             return;
         }
         self.selection = None;
+        let kb = (self.kb_flags, std::mem::take(&mut self.kb_stack));
+        let (flags, stack) = std::mem::replace(&mut self.alt_kb, kb);
+        self.kb_flags = flags;
+        self.kb_stack = stack;
         if on {
             self.display_offset = 0;
-            if save { self.save_cursor(); }
+            if save {
+                self.save_cursor();
+            }
             let blank = Grid::new(self.cols(), self.rows());
             self.main_grid = Some(std::mem::replace(&mut self.grid, blank));
         } else {
             if let Some(g) = self.main_grid.take() {
                 self.grid = g;
             }
-            if save { self.restore_cursor(); }
+            if save {
+                self.restore_cursor();
+            }
         }
     }
     fn set_mouse(&mut self, mode: MouseMode, on: bool) {
@@ -673,10 +936,23 @@ impl Term {
             self.mouse_mode = MouseMode::Off;
         }
     }
+    fn set_ansi_modes(&mut self, params: &[u16], on: bool) {
+        for &m in params {
+            match m {
+                4 => self.insert_mode = on,
+                20 => self.newline_mode = on,
+                _ => {}
+            }
+        }
+    }
     fn set_modes(&mut self, params: &[u16], on: bool) {
         for &m in params {
             match m {
                 1 => self.app_cursor_keys = on,
+                6 => {
+                    self.origin_mode = on;
+                    self.move_to_origin(0, 0);
+                }
                 7 => self.autowrap = on,
                 12 => self.cursor_blink = on,
                 25 => self.cursor_visible = on,
@@ -687,6 +963,13 @@ impl Term {
                 1004 => self.focus_reporting = on,
                 1006 => self.mouse_sgr = on,
                 1007 => self.alt_scroll = on,
+                1048 => {
+                    if on {
+                        self.save_cursor();
+                    } else {
+                        self.restore_cursor();
+                    }
+                }
                 1049 => self.set_alt_screen(on, true),
                 2004 => self.bracketed_paste = on,
                 2026 => {
@@ -704,6 +987,7 @@ impl Term {
     fn decrqm(&mut self, mode: u16) {
         let state = match mode {
             1 => Some(self.app_cursor_keys),
+            6 => Some(self.origin_mode),
             7 => Some(self.autowrap),
             12 => Some(self.cursor_blink),
             25 => Some(self.cursor_visible),
@@ -726,6 +1010,26 @@ impl Term {
         };
         self.reply(&format!("\x1b[?{};{}$y", mode, ps));
     }
+    fn decrqm_ansi(&mut self, mode: u16) {
+        let ps = match mode {
+            4 => {
+                if self.insert_mode {
+                    1
+                } else {
+                    2
+                }
+            }
+            20 => {
+                if self.newline_mode {
+                    1
+                } else {
+                    2
+                }
+            }
+            _ => 0,
+        };
+        self.reply(&format!("\x1b[{};{}$y", mode, ps));
+    }
     fn set_cursor_style(&mut self, n: u16) {
         let (shape, blink) = match n {
             0 => (self.default_cursor_shape, self.default_cursor_blink),
@@ -740,20 +1044,70 @@ impl Term {
         self.cursor_shape = shape;
         self.cursor_blink = blink;
     }
+    fn kitty_keyboard(&mut self, private: u8, params: &[u16]) {
+        let first = params.first().copied().unwrap_or(0);
+        match private {
+            b'?' => {
+                let s = format!("\x1b[?{}u", self.kb_flags);
+                self.reply(&s);
+            }
+            b'>' => {
+                if self.kb_stack.len() >= KB_STACK_MAX {
+                    self.kb_stack.remove(0);
+                }
+                self.kb_stack.push(self.kb_flags);
+                self.kb_flags = (first as u8) & KB_SUPPORTED;
+            }
+            b'<' => {
+                let n = (first as usize).max(1);
+                for _ in 0..n {
+                    match self.kb_stack.pop() {
+                        Some(f) => self.kb_flags = f,
+                        None => {
+                            self.kb_flags = 0;
+                            break;
+                        }
+                    }
+                }
+            }
+            b'=' => {
+                let f = (first as u8) & KB_SUPPORTED;
+                match params.get(1).copied().unwrap_or(1) {
+                    2 => self.kb_flags |= f,
+                    3 => self.kb_flags &= !f,
+                    _ => self.kb_flags = f,
+                }
+            }
+            _ => {}
+        }
+    }
     fn sgr(&mut self, params: &[u16], subs: &[bool]) {
         if params.is_empty() {
-            self.pen = Pen::DEFAULT;
+            self.reset_pen_attrs();
             return;
         }
         let mut i = 0;
         while i < params.len() {
             let p = params[i];
             match p {
-                0 => self.pen = Pen::DEFAULT,
+                0 => self.reset_pen_attrs(),
                 1 => self.pen.flags |= flags::BOLD,
                 2 => self.pen.flags |= flags::DIM,
                 3 => self.pen.flags |= flags::ITALIC,
-                4 | 21 => self.pen.flags |= flags::UNDERLINE,
+                4 => {
+                    let style = if subs.get(i + 1) == Some(&true) {
+                        i += 1;
+                        params[i]
+                    } else {
+                        1
+                    };
+                    if style == 0 {
+                        self.pen.flags &= !flags::UNDERLINE;
+                    } else {
+                        self.pen.flags |= flags::UNDERLINE;
+                    }
+                }
+                21 => self.pen.flags |= flags::UNDERLINE,
                 5 | 6 => self.pen.flags |= flags::BLINK,
                 7 => self.pen.flags |= flags::INVERSE,
                 8 => self.pen.flags |= flags::HIDDEN,
@@ -790,9 +1144,183 @@ impl Term {
             i += 1;
         }
     }
+    fn reset_pen_attrs(&mut self) {
+        let extra = self.pen.extra;
+        self.pen = Pen::DEFAULT;
+        self.pen.extra = extra;
+    }
+    fn prev_cell_pos(&self) -> Option<(usize, usize)> {
+        let row = self.cursor.row;
+        let mut col = if self.wrap_pending { self.cursor.col } else { self.cursor.col.checked_sub(1)? };
+        if col > 0 && self.grid.row(row)[col].flags & WIDE_SPACER != 0 {
+            col -= 1;
+        }
+        Some((row, col))
+    }
+    fn attach_to_prev(&mut self, c: char) -> bool {
+        let Some((r, col)) = self.prev_cell_pos() else {
+            return false;
+        };
+        let cell = self.grid.row(r)[col];
+        let (cluster, link) = self.extras.get(cell.extra);
+        let mut s = self.clusters.get(cluster).unwrap_or("").to_string();
+        if s.chars().count() >= 16 {
+            return true;
+        }
+        s.push(c);
+        let id = self.clusters.intern(&s);
+        if id != 0 {
+            let extra = self.extras.id(id, link);
+            if extra != 0 {
+                self.grid.row_mut(r)[col].extra = extra;
+            }
+        }
+        true
+    }
+    fn prev_is_wide(&self) -> bool {
+        self.prev_cell_pos().is_some_and(|(r, c)| is_wide(self.grid.row(r)[c].ch))
+    }
+    fn map_charset(&self, c: char) -> char {
+        match self.charsets[self.gl] {
+            Charset::Ascii => c,
+            Charset::Uk => {
+                if c == '#' {
+                    '£'
+                } else {
+                    c
+                }
+            }
+            Charset::DecGraphics => dec_graphics(c),
+        }
+    }
+    fn print_slow(&self) -> bool {
+        self.charsets[self.gl] != Charset::Ascii || self.insert_mode || self.join_next
+    }
 }
 fn is_wide(c: char) -> bool {
     unicode_width::UnicodeWidthChar::width(c) == Some(2)
+}
+fn is_emoji_modifier(c: char) -> bool {
+    ('\u{1F3FB}'..='\u{1F3FF}').contains(&c)
+}
+fn dec_graphics(c: char) -> char {
+    match c {
+        '`' => '◆',
+        'a' => '▒',
+        'b' => '␉',
+        'c' => '␌',
+        'd' => '␍',
+        'e' => '␊',
+        'f' => '°',
+        'g' => '±',
+        'h' => '␤',
+        'i' => '␋',
+        'j' => '┘',
+        'k' => '┐',
+        'l' => '┌',
+        'm' => '└',
+        'n' => '┼',
+        'o' => '⎺',
+        'p' => '⎻',
+        'q' => '─',
+        'r' => '⎼',
+        's' => '⎽',
+        't' => '├',
+        'u' => '┤',
+        'v' => '┴',
+        'w' => '┬',
+        'x' => '│',
+        'y' => '≤',
+        'z' => '≥',
+        '{' => 'π',
+        '|' => '≠',
+        '}' => '£',
+        '~' => '·',
+        _ => c,
+    }
+}
+fn charset_for(b: u8) -> Charset {
+    match b {
+        b'0' => Charset::DecGraphics,
+        b'A' => Charset::Uk,
+        _ => Charset::Ascii,
+    }
+}
+const URL_SCHEMES: [&str; 6] = ["https://", "http://", "file://", "ftp://", "mailto:", "ssh://"];
+fn url_char(c: char) -> bool {
+    !c.is_whitespace() && !matches!(c, '<' | '>' | '"' | '`' | '{' | '}' | '|' | '\\' | '^')
+}
+fn find_url(chars: &[char], target: usize) -> Option<String> {
+    if target >= chars.len() || !url_char(chars[target]) {
+        return None;
+    }
+    let mut s = target;
+    while s > 0 && url_char(chars[s - 1]) {
+        s -= 1;
+    }
+    let mut e = target + 1;
+    while e < chars.len() && url_char(chars[e]) {
+        e += 1;
+    }
+    let word: String = chars[s..e].iter().collect();
+    let target_byte: usize = chars[s..target].iter().map(|c| c.len_utf8()).sum();
+    let mut best: Option<(usize, usize)> = None;
+    for scheme in URL_SCHEMES {
+        let mut from = 0;
+        while let Some(pos) = word[from..].find(scheme) {
+            let start = from + pos;
+            if start <= target_byte && best.is_none_or(|(b, _)| start > b) {
+                best = Some((start, scheme.len()));
+            }
+            from = start + scheme.len();
+        }
+    }
+    let (start, scheme_len) = best?;
+    let mut url = &word[start..];
+    loop {
+        let trimmed = url.trim_end_matches(['.', ',', ';', ':', '!', '?', '\'']);
+        let unbalanced_paren =
+            trimmed.ends_with(')') && trimmed.matches('(').count() < trimmed.matches(')').count();
+        let unbalanced_bracket = trimmed.ends_with(']') && !trimmed.contains('[');
+        let trimmed =
+            if unbalanced_paren || unbalanced_bracket { &trimmed[..trimmed.len() - 1] } else { trimmed };
+        if trimmed.len() == url.len() {
+            break;
+        }
+        url = trimmed;
+    }
+    if url.len() <= scheme_len || start + url.len() <= target_byte {
+        return None;
+    }
+    Some(url.to_string())
+}
+fn percent_decode(s: &str) -> String {
+    let b = s.as_bytes();
+    let mut out = Vec::with_capacity(b.len());
+    let mut i = 0;
+    while i < b.len() {
+        if b[i] == b'%' && i + 2 < b.len() {
+            if let Ok(v) = u8::from_str_radix(&s[i + 1..i + 3], 16) {
+                out.push(v);
+                i += 3;
+                continue;
+            }
+        }
+        out.push(b[i]);
+        i += 1;
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+fn parse_osc7(rest: &[u8]) -> Option<String> {
+    let s = std::str::from_utf8(rest).ok()?;
+    let after = s.strip_prefix("file://")?;
+    let slash = after.find('/')?;
+    let path = percent_decode(&after[slash..]);
+    if path.is_empty() {
+        None
+    } else {
+        Some(path)
+    }
 }
 
 fn wrap_logical_line(line: Vec<Cell>, cols: usize) -> Vec<Vec<Cell>> {
@@ -825,7 +1353,7 @@ fn fix_wide_pairs(g: &mut Grid) {
                     row[c] = Cell { flags: row[c].flags & !WIDE_SPACER, ..row[c] };
                 }
             } else if is_wide(row[c].ch) && (c + 1 >= cols || row[c + 1].flags & WIDE_SPACER == 0) {
-                row[c] = Cell { ch: ' ', ..row[c] };
+                row[c] = Cell { ch: ' ', extra: 0, ..row[c] };
             }
         }
     }
@@ -915,6 +1443,15 @@ fn base64_decode(data: &[u8]) -> Option<Vec<u8>> {
 }
 impl Perform for Term {
     fn print(&mut self, c: char) {
+        let c = self.map_charset(c);
+        let w = unicode_width::UnicodeWidthChar::width(c).unwrap_or(1);
+        let join = std::mem::take(&mut self.join_next);
+        if w == 0 || (join && w == 2) || (is_emoji_modifier(c) && self.prev_is_wide()) {
+            if self.attach_to_prev(c) {
+                self.join_next = c == ZWJ;
+            }
+            return;
+        }
         if self.wrap_pending {
             if self.autowrap {
                 let last = self.cols() - 1;
@@ -924,10 +1461,6 @@ impl Perform for Term {
             }
             self.wrap_pending = false;
         }
-        let w = unicode_width::UnicodeWidthChar::width(c).unwrap_or(1);
-        if w == 0 {
-            return;
-        }
         let cols = self.cols();
         if w == 2 && self.cursor.col + 2 > cols {
             if self.autowrap {
@@ -936,18 +1469,22 @@ impl Perform for Term {
                 self.cursor.col = 0;
                 self.linefeed();
             } else {
-                self.cursor.col = cols - 1;
+                self.cursor.col = cols.saturating_sub(2);
             }
+        }
+        if self.insert_mode {
+            self.insert_chars(w);
         }
         let col = self.cursor.col;
         self.clear_wide_edges(self.cursor.row, col, (col + w).min(cols));
-        let cell = Cell { ch: c, fg: self.pen.fg, bg: self.pen.bg, flags: self.pen.flags };
+        let cell =
+            Cell { ch: c, fg: self.pen.fg, bg: self.pen.bg, flags: self.pen.flags, extra: self.pen.extra };
         self.grid.row_mut(self.cursor.row)[self.cursor.col] = cell;
         if w == 2 && self.cursor.col + 1 < cols {
-            let spacer =
-                Cell { ch: ' ', fg: self.pen.fg, bg: self.pen.bg, flags: self.pen.flags | WIDE_SPACER };
+            let spacer = Cell { ch: ' ', flags: self.pen.flags | WIDE_SPACER, ..cell };
             self.grid.row_mut(self.cursor.row)[self.cursor.col + 1] = spacer;
         }
+        self.last_char = Some(c);
         let advance = if w == 2 { 2 } else { 1 };
         if self.cursor.col + advance < cols {
             self.cursor.col += advance;
@@ -957,6 +1494,12 @@ impl Perform for Term {
         }
     }
     fn print_ascii(&mut self, mut s: &[u8]) {
+        if self.print_slow() {
+            for &b in s {
+                self.print(b as char);
+            }
+            return;
+        }
         let cols = self.cols();
         while !s.is_empty() {
             if self.wrap_pending {
@@ -971,11 +1514,12 @@ impl Perform for Term {
             let col = self.cursor.col;
             let n = s.len().min(cols - col);
             self.clear_wide_edges(self.cursor.row, col, col + n);
-            let (fg, bg, fl) = (self.pen.fg, self.pen.bg, self.pen.flags);
+            let (fg, bg, fl, extra) = (self.pen.fg, self.pen.bg, self.pen.flags, self.pen.extra);
             let row = self.grid.row_mut(self.cursor.row);
             for (cell, &b) in row[col..col + n].iter_mut().zip(&s[..n]) {
-                *cell = Cell { ch: b as char, fg, bg, flags: fl };
+                *cell = Cell { ch: b as char, fg, bg, flags: fl, extra };
             }
+            self.last_char = Some(s[n - 1] as char);
             s = &s[n..];
             if col + n < cols {
                 self.cursor.col = col + n;
@@ -987,19 +1531,24 @@ impl Perform for Term {
     }
     fn execute(&mut self, byte: u8) {
         match byte {
+            0x07 => self.bell = true,
             0x08 => {
                 self.cursor.col = self.cursor.col.saturating_sub(1);
                 self.wrap_pending = false;
             }
-            0x09 => {
-                let next = ((self.cursor.col / 8) + 1) * 8;
-                self.cursor.col = next.min(self.cols() - 1);
+            0x09 => self.tab_forward(1),
+            0x0A..=0x0C => {
+                self.linefeed();
+                if self.newline_mode {
+                    self.cursor.col = 0;
+                }
             }
-            0x0A | 0x0B | 0x0C => self.linefeed(),
             0x0D => {
                 self.cursor.col = 0;
                 self.wrap_pending = false;
             }
+            0x0E => self.gl = 1,
+            0x0F => self.gl = 0,
             _ => {}
         }
     }
@@ -1011,6 +1560,25 @@ impl Perform for Term {
                 }
                 ([b'$'], Some(b'?'), b'p') => {
                     self.decrqm(params.first().copied().unwrap_or(0));
+                }
+                ([b'$'], None, b'p') => {
+                    self.decrqm_ansi(params.first().copied().unwrap_or(0));
+                }
+                ([b'!'], None, b'p') => {
+                    let keep = (self.default_fg, self.default_bg);
+                    self.pen = Pen::DEFAULT;
+                    self.insert_mode = false;
+                    self.origin_mode = false;
+                    self.autowrap = true;
+                    self.cursor_visible = true;
+                    self.app_cursor_keys = false;
+                    self.app_keypad = false;
+                    self.scroll_top = 0;
+                    self.scroll_bottom = self.rows() - 1;
+                    self.charsets = [Charset::Ascii; 2];
+                    self.gl = 0;
+                    self.saved = None;
+                    (self.default_fg, self.default_bg) = keep;
                 }
                 _ => {}
             }
@@ -1027,20 +1595,55 @@ impl Perform for Term {
         match (private, action) {
             (Some(b'?'), b'h') => self.set_modes(params, true),
             (Some(b'?'), b'l') => self.set_modes(params, false),
-            (Some(b'>'), b'c') if first == 0 => self.reply("\x1b[>0;0;0c"),
+            (Some(b'>'), b'c') if first == 0 => self.reply("\x1b[>1;10;0c"),
             (Some(b'>'), b'q') => {
                 self.reply(concat!("\x1bP>|aeternus ", env!("CARGO_PKG_VERSION"), "\x1b\\"))
             }
+            (Some(pv @ (b'?' | b'>' | b'<' | b'=')), b'u') => self.kitty_keyboard(pv, params),
             (Some(_), _) => {}
-            (None, b'A') => self.move_to(row.saturating_sub(p(0, 1)), col),
-            (None, b'B') => self.move_to(row + p(0, 1), col),
-            (None, b'C') => self.move_to(row, col + p(0, 1)),
+            (None, b'A') => {
+                let top = if row >= self.scroll_top { self.scroll_top } else { 0 };
+                self.move_to(row.saturating_sub(p(0, 1)).max(top), col);
+            }
+            (None, b'B') | (None, b'e') => {
+                let bottom = if row <= self.scroll_bottom { self.scroll_bottom } else { self.rows() - 1 };
+                self.move_to((row + p(0, 1)).min(bottom), col);
+            }
+            (None, b'C') | (None, b'a') => self.move_to(row, col + p(0, 1)),
             (None, b'D') => self.move_to(row, col.saturating_sub(p(0, 1))),
-            (None, b'E') => self.move_to(row + p(0, 1), 0),
-            (None, b'F') => self.move_to(row.saturating_sub(p(0, 1)), 0),
-            (None, b'G') => self.move_to(row, p(0, 1) - 1),
-            (None, b'H') | (None, b'f') => self.move_to(p(0, 1) - 1, p(1, 1) - 1),
-            (None, b'd') => self.move_to(p(0, 1) - 1, col),
+            (None, b'E') => {
+                let bottom = if row <= self.scroll_bottom { self.scroll_bottom } else { self.rows() - 1 };
+                self.move_to((row + p(0, 1)).min(bottom), 0);
+            }
+            (None, b'F') => {
+                let top = if row >= self.scroll_top { self.scroll_top } else { 0 };
+                self.move_to(row.saturating_sub(p(0, 1)).max(top), 0);
+            }
+            (None, b'G') | (None, b'`') => self.move_to(row, p(0, 1) - 1),
+            (None, b'H') | (None, b'f') => self.move_to_origin(p(0, 1) - 1, p(1, 1) - 1),
+            (None, b'd') => {
+                let c = self.cursor.col;
+                self.move_to_origin(p(0, 1) - 1, c);
+            }
+            (None, b'I') => self.tab_forward(p(0, 1)),
+            (None, b'Z') => self.tab_backward(p(0, 1)),
+            (None, b'g') => match first {
+                0 => {
+                    if let Some(t) = self.tabs.get_mut(col) {
+                        *t = false;
+                    }
+                }
+                3 => self.tabs.iter_mut().for_each(|t| *t = false),
+                _ => {}
+            },
+            (None, b'b') => {
+                if let Some(c) = self.last_char {
+                    let n = p(0, 1).min(self.cols() * self.rows());
+                    for _ in 0..n {
+                        self.print(c);
+                    }
+                }
+            }
             (None, b'J') => self.erase_display(first),
             (None, b'K') => self.erase_line(first),
             (None, b'L') => self.insert_lines(p(0, 1)),
@@ -1053,6 +1656,8 @@ impl Perform for Term {
                 let b = self.blank();
                 self.grid.scroll_down(self.scroll_top, self.scroll_bottom, p(0, 1), b);
             }
+            (None, b'h') => self.set_ansi_modes(params, true),
+            (None, b'l') => self.set_ansi_modes(params, false),
             (None, b'm') => self.sgr(params, subs),
             (None, b'r') => {
                 let top = p(0, 1) - 1;
@@ -1060,46 +1665,68 @@ impl Perform for Term {
                 if top < bottom {
                     self.scroll_top = top;
                     self.scroll_bottom = bottom;
-                    self.move_to(0, 0);
+                    self.move_to_origin(0, 0);
                 }
             }
             (None, b's') => self.save_cursor(),
             (None, b'u') => self.restore_cursor(),
-            (None, b'c') if first == 0 => self.reply("\x1b[?62;c"),
+            (None, b'c') if first == 0 => self.reply("\x1b[?62;22c"),
             (None, b'n') => match first {
                 5 => self.reply("\x1b[0n"),
                 6 => {
-                    let s = format!("\x1b[{};{}R", row + 1, col + 1);
+                    let r = if self.origin_mode { row.saturating_sub(self.scroll_top) } else { row };
+                    let s = format!("\x1b[{};{}R", r + 1, col + 1);
                     self.reply(&s);
                 }
                 _ => {}
             },
-            (None, b't') => {
-                if first == 18 {
+            (None, b't') => match first {
+                14 => {
+                    let (cw, ch) = self.cell_px;
+                    let s = format!("\x1b[4;{};{}t", ch as usize * self.rows(), cw as usize * self.cols());
+                    self.reply(&s);
+                }
+                16 => {
+                    let (cw, ch) = self.cell_px;
+                    let s = format!("\x1b[6;{};{}t", ch, cw);
+                    self.reply(&s);
+                }
+                18 => {
                     let s = format!("\x1b[8;{};{}t", self.rows(), self.cols());
                     self.reply(&s);
                 }
-            }
+                _ => {}
+            },
             _ => {}
         }
     }
     fn esc(&mut self, inter: &[u8], byte: u8) {
-        if !inter.is_empty() {
-            return;
-        }
-        match byte {
-            b'7' => self.save_cursor(),
-            b'8' => self.restore_cursor(),
-            b'D' => self.linefeed(),
-            b'E' => {
-                self.cursor.col = 0;
-                self.linefeed();
-            }
-            b'M' => self.reverse_index(),
-            b'=' => self.app_keypad = true,
-            b'>' => self.app_keypad = false,
-            b'Z' => self.reply("\x1b[?62;c"),
-            b'c' => self.reset(),
+        match inter {
+            [] => match byte {
+                b'7' => self.save_cursor(),
+                b'8' => self.restore_cursor(),
+                b'D' => self.linefeed(),
+                b'E' => {
+                    self.linefeed();
+                    self.cursor.col = 0;
+                }
+                b'H' => {
+                    let c = self.cursor.col;
+                    if let Some(t) = self.tabs.get_mut(c) {
+                        *t = true;
+                    }
+                }
+                b'M' => self.reverse_index(),
+                b'=' => self.app_keypad = true,
+                b'>' => self.app_keypad = false,
+                b'Z' => self.reply("\x1b[?62;22c"),
+                b'c' => self.reset(),
+                b'n' => self.gl = 0,
+                _ => {}
+            },
+            [b'('] => self.charsets[0] = charset_for(byte),
+            [b')'] => self.charsets[1] = charset_for(byte),
+            [b'#'] if byte == b'8' => self.screen_alignment(),
             _ => {}
         }
     }
@@ -1111,20 +1738,40 @@ impl Perform for Term {
             b"0" | b"2" => self.title = String::from_utf8_lossy(rest).into_owned(),
             b"4" => {
                 let mut it = rest.split(|&b| b == b';');
-                loop {
-                    let (Some(idx), Some(spec)) = (it.next(), it.next()) else { break };
+                while let (Some(idx), Some(spec)) = (it.next(), it.next()) {
+                    let Ok(i) = std::str::from_utf8(idx).unwrap_or("").parse::<u8>() else {
+                        continue;
+                    };
                     if spec == b"?" {
+                        let c = self.ansi_override.get(&i).copied().unwrap_or(self.palette_ansi[i as usize]);
+                        let s = format!(
+                            "\x1b]4;{};rgb:{:02x}{:02x}/{:02x}{:02x}/{:02x}{:02x}\x1b\\",
+                            i, c[0], c[0], c[1], c[1], c[2], c[2]
+                        );
+                        self.reply(&s);
                         continue;
                     }
-                    if let (Ok(i), Some(c)) = (
-                        std::str::from_utf8(idx).unwrap_or("").parse::<u8>(),
-                        parse_color_spec(spec),
-                    ) {
-                        if (i as usize) < 16 {
-                            self.ansi_override.insert(i, c);
-                        }
+                    if let Some(c) = parse_color_spec(spec) {
+                        self.ansi_override.insert(i, c);
                     }
                 }
+            }
+            b"7" => {
+                if let Some(path) = parse_osc7(rest) {
+                    self.cwd = Some(path);
+                }
+            }
+            b"8" => {
+                let mut it = rest.splitn(2, |&b| b == b';');
+                let _params = it.next();
+                let uri = it.next().unwrap_or(&[]);
+                self.pen.extra = if uri.is_empty() || uri.len() > MAX_LINK_LEN {
+                    0
+                } else {
+                    let s = String::from_utf8_lossy(uri);
+                    let link = self.links.intern(&s);
+                    self.extras.id(0, link)
+                };
             }
             b"10" | b"11" | b"12" => {
                 if rest == b"?" {
@@ -1136,7 +1783,12 @@ impl Perform for Term {
                     let s = format!(
                         "\x1b]{};rgb:{:02x}{:02x}/{:02x}{:02x}/{:02x}{:02x}\x1b\\",
                         String::from_utf8_lossy(code),
-                        c[0], c[0], c[1], c[1], c[2], c[2]
+                        c[0],
+                        c[0],
+                        c[1],
+                        c[1],
+                        c[2],
+                        c[2]
                     );
                     self.reply(&s);
                 } else if let Some(c) = parse_color_spec(rest) {
@@ -1348,12 +2000,12 @@ mod tests {
             let row = t.grid.row(r);
             for c in 0..row.len() {
                 if row[c].flags & WIDE_SPACER != 0 {
-                    assert!(c > 0 && is_wide(row[c - 1].ch), "spacer órfão em {r},{c}: {}", t.dump());
+                    assert!(c > 0 && is_wide(row[c - 1].ch), "orphan spacer at {r},{c}: {}", t.dump());
                 }
                 if is_wide(row[c].ch) {
                     assert!(
                         c + 1 < row.len() && row[c + 1].flags & WIDE_SPACER != 0,
-                        "metade larga sem par em {r},{c}: {}",
+                        "unpaired wide half at {r},{c}: {}",
                         t.dump()
                     );
                 }
@@ -1482,5 +2134,334 @@ mod tests {
         t.resize(10, 2);
         assert_eq!(row_text(&t, 0), "abcdef    ");
         assert_eq!(row_text(&t, 1), "g         ");
+    }
+
+    #[test]
+    fn reflow_keeps_short_output_on_screen() {
+        let mut t = Term::new(40, 20);
+        feed(&mut t, "red green blue\r\n");
+        t.resize(30, 12);
+        assert_eq!(row_text(&t, 0).trim_end(), "red green blue");
+        assert_eq!(t.cursor.row, 1);
+        assert!(!t.scroll_display(1));
+        t.resize(50, 25);
+        assert_eq!(row_text(&t, 0).trim_end(), "red green blue");
+        assert_eq!(t.cursor.row, 1);
+    }
+
+    #[test]
+    fn reflow_keeps_full_screen_anchored_to_bottom() {
+        let mut t = Term::new(10, 4);
+        feed(&mut t, "1\r\n2\r\n3\r\n4\r\n5");
+        t.resize(8, 3);
+        assert_eq!(row_text(&t, 2).trim_end(), "5");
+        assert_eq!(t.cursor.row, 2);
+        t.resize(10, 5);
+        assert_eq!(row_text(&t, 0).trim_end(), "1");
+        assert_eq!(row_text(&t, 4).trim_end(), "5");
+    }
+
+    #[test]
+    fn dec_special_graphics() {
+        let mut t = Term::new(10, 1);
+        feed(&mut t, "\x1b(0lqk\x1b(Bx");
+        assert_eq!(row_text(&t, 0), "┌─┐x      ");
+        let mut t = Term::new(10, 1);
+        feed(&mut t, "\x1b)0a\x0eq\x0fq");
+        assert_eq!(row_text(&t, 0), "a─q       ");
+    }
+    #[test]
+    fn decsc_restores_charset() {
+        let mut t = Term::new(10, 1);
+        feed(&mut t, "\x1b(0\x1b7\x1b(B\x1b8q");
+        assert_eq!(t.grid.row(0)[0].ch, '─');
+    }
+    #[test]
+    fn rep_repeats_last_char() {
+        let mut t = Term::new(10, 1);
+        feed(&mut t, "ab\x1b[3b");
+        assert_eq!(row_text(&t, 0), "abbbb     ");
+    }
+    #[test]
+    fn tab_stops() {
+        let mut t = Term::new(20, 1);
+        feed(&mut t, "\tx");
+        assert_eq!(t.grid.row(0)[8].ch, 'x');
+        let mut t = Term::new(20, 1);
+        feed(&mut t, "\x1b[3g\x1b[4G\x1bH\r\tx");
+        assert_eq!(t.grid.row(0)[3].ch, 'x');
+        let mut t = Term::new(30, 1);
+        feed(&mut t, "\x1b[2Ix");
+        assert_eq!(t.grid.row(0)[16].ch, 'x');
+        assert_eq!(t.cursor.col, 17);
+        let mut t = Term::new(30, 1);
+        feed(&mut t, "\x1b[20G\x1b[Zy");
+        assert_eq!(t.grid.row(0)[16].ch, 'y');
+    }
+    #[test]
+    fn insert_mode_shifts_text() {
+        let mut t = Term::new(6, 1);
+        feed(&mut t, "abc\r\x1b[4hX\x1b[4lY");
+        assert_eq!(row_text(&t, 0), "XYbc  ");
+        let mut t = Term::new(6, 1);
+        feed(&mut t, "abc\r\x1b[4hXY");
+        assert_eq!(row_text(&t, 0), "XYabc ");
+    }
+    #[test]
+    fn origin_mode_addresses_region() {
+        let mut t = Term::new(10, 6);
+        feed(&mut t, "\x1b[3;5r\x1b[?6h\x1b[1;1Hx");
+        assert_eq!(t.grid.row(2)[0].ch, 'x');
+        feed(&mut t, "\x1b[10;1H");
+        assert_eq!(t.cursor.row, 4);
+        feed(&mut t, "\x1b[6n");
+        assert_eq!(String::from_utf8_lossy(&t.replies), "\x1b[3;1R");
+        feed(&mut t, "\x1b[?6l");
+        assert_eq!(t.cursor.row, 0);
+    }
+    #[test]
+    fn cursor_up_stops_at_margin() {
+        let mut t = Term::new(10, 6);
+        feed(&mut t, "\x1b[2;5r\x1b[4;1H\x1b[10A");
+        assert_eq!(t.cursor.row, 1);
+    }
+    #[test]
+    fn newline_mode() {
+        let mut t = Term::new(10, 3);
+        feed(&mut t, "\x1b[20habc\ndef");
+        assert_eq!(row_text(&t, 1), "def       ");
+    }
+    #[test]
+    fn decaln_fills_screen() {
+        let mut t = Term::new(3, 2);
+        feed(&mut t, "\x1b#8");
+        assert_eq!(row_text(&t, 0), "EEE");
+        assert_eq!(row_text(&t, 1), "EEE");
+    }
+    #[test]
+    fn bell_sets_flag() {
+        let mut t = Term::new(3, 1);
+        feed(&mut t, "\x07");
+        assert!(t.bell);
+        let mut t = Term::new(3, 1);
+        feed(&mut t, "\x1b]0;title\x07");
+        assert!(!t.bell);
+        assert_eq!(t.title, "title");
+    }
+    #[test]
+    fn combining_marks_join_previous_cell() {
+        let mut t = Term::new(10, 1);
+        feed(&mut t, "e\u{0301}x");
+        assert_eq!(t.grid.row(0)[0].ch, 'e');
+        assert_eq!(t.cluster(&t.grid.row(0)[0]), Some("\u{0301}"));
+        assert_eq!(t.grid.row(0)[1].ch, 'x');
+        t.selection_start(0, 0, SelMode::Simple);
+        t.selection_update(0, 1);
+        assert_eq!(t.selection_text().unwrap(), "e\u{0301}x");
+    }
+    #[test]
+    fn combining_at_wrap_edge() {
+        let mut t = Term::new(3, 2);
+        feed(&mut t, "abc\u{0301}");
+        assert_eq!(t.cluster(&t.grid.row(0)[2]), Some("\u{0301}"));
+        assert_eq!(t.cursor.row, 0);
+    }
+    #[test]
+    fn zwj_sequence_is_one_cell_pair() {
+        let mut t = Term::new(10, 1);
+        feed(&mut t, "👨\u{200D}👩\u{200D}👧!");
+        assert_eq!(t.grid.row(0)[0].ch, '👨');
+        assert_eq!(t.cluster(&t.grid.row(0)[0]), Some("\u{200D}👩\u{200D}👧"));
+        assert_eq!(t.grid.row(0)[2].ch, '!');
+    }
+    #[test]
+    fn emoji_modifier_joins() {
+        let mut t = Term::new(10, 1);
+        feed(&mut t, "👍🏽x");
+        assert_eq!(t.cluster(&t.grid.row(0)[0]), Some("🏽"));
+        assert_eq!(t.grid.row(0)[2].ch, 'x');
+    }
+    #[test]
+    fn osc7_sets_cwd() {
+        let mut t = Term::new(10, 1);
+        feed(&mut t, "\x1b]7;file://host/home/me/my%20dir\x07");
+        assert_eq!(t.cwd.as_deref(), Some("/home/me/my dir"));
+    }
+    #[test]
+    fn osc8_hyperlinks() {
+        let mut t = Term::new(20, 1);
+        feed(&mut t, "\x1b]8;;https://example.com\x1b\\link\x1b]8;;\x1b\\ no");
+        assert_eq!(t.link_at(0, 0).as_deref(), Some("https://example.com"));
+        assert_eq!(t.link_at(0, 3).as_deref(), Some("https://example.com"));
+        assert_eq!(t.link_at(0, 5), None);
+        feed(&mut t, "\x1b[0m");
+        assert_eq!(t.link_at(0, 0).as_deref(), Some("https://example.com"));
+    }
+    #[test]
+    fn url_detection() {
+        let mut t = Term::new(60, 2);
+        feed(&mut t, "see (https://example.com/a_b?x=1). ok mailto:me@x.org");
+        assert_eq!(t.url_at(0, 10).as_deref(), Some("https://example.com/a_b?x=1"));
+        assert_eq!(t.url_at(0, 2), None);
+        assert_eq!(t.url_at(0, 45).as_deref(), Some("mailto:me@x.org"));
+        let mut t = Term::new(10, 3);
+        feed(&mut t, "http://abcdefghijklmn");
+        assert_eq!(t.url_at(1, 3).as_deref(), Some("http://abcdefghijklmn"));
+    }
+    #[test]
+    fn kitty_keyboard_protocol() {
+        let mut t = Term::new(10, 1);
+        feed(&mut t, "\x1b[?u");
+        assert_eq!(String::from_utf8_lossy(&std::mem::take(&mut t.replies)), "\x1b[?0u");
+        feed(&mut t, "\x1b[>31u\x1b[?u");
+        assert_eq!(String::from_utf8_lossy(&std::mem::take(&mut t.replies)), "\x1b[?1u");
+        feed(&mut t, "\x1b[?1049h");
+        assert_eq!(t.kb_flags, 0);
+        feed(&mut t, "\x1b[?1049l");
+        assert_eq!(t.kb_flags, 1);
+        feed(&mut t, "\x1b[<u");
+        assert_eq!(t.kb_flags, 0);
+        feed(&mut t, "\x1b[=1;1u");
+        assert_eq!(t.kb_flags, 1);
+        feed(&mut t, "\x1b[=1;3u");
+        assert_eq!(t.kb_flags, 0);
+    }
+    #[test]
+    fn pixel_size_reports() {
+        let mut t = Term::new(10, 5);
+        t.cell_px = (8, 16);
+        feed(&mut t, "\x1b[14t\x1b[16t\x1b[18t");
+        assert_eq!(String::from_utf8_lossy(&t.replies), "\x1b[4;80;80t\x1b[6;16;8t\x1b[8;5;10t");
+    }
+    #[test]
+    fn osc4_query_uses_configured_palette() {
+        let mut cfg = crate::config::Config::defaults();
+        cfg.palette.ansi[200] = [1, 2, 3];
+        let mut t = Term::new(10, 1);
+        t.apply_config(&cfg);
+        feed(&mut t, "\x1b]4;200;?\x07");
+        assert_eq!(
+            String::from_utf8_lossy(&std::mem::take(&mut t.replies)),
+            "\x1b]4;200;rgb:0101/0202/0303\x1b\\"
+        );
+        feed(&mut t, "\x1b]4;200;#0a0b0c\x07\x1bc\x1b]4;200;?\x07");
+        assert_eq!(String::from_utf8_lossy(&t.replies), "\x1b]4;200;rgb:0101/0202/0303\x1b\\");
+    }
+    #[test]
+    fn decrqm_reports_new_modes() {
+        let mut t = Term::new(10, 1);
+        feed(&mut t, "\x1b[4h\x1b[4$p\x1b[?6$p");
+        assert_eq!(String::from_utf8_lossy(&t.replies), "\x1b[4;1$y\x1b[?6;2$y");
+    }
+    #[test]
+    fn sgr_reset_keeps_link_and_underline_styles() {
+        let mut t = Term::new(10, 1);
+        feed(&mut t, "\x1b[4:3ma\x1b[4:0mb");
+        assert_ne!(t.grid.row(0)[0].flags & flags::UNDERLINE, 0);
+        assert_eq!(t.grid.row(0)[1].flags & flags::UNDERLINE, 0);
+    }
+    #[test]
+    fn reflow_round_trip() {
+        let mut t = Term::new(10, 4);
+        feed(&mut t, "0123456789abcdef\r\nxy");
+        t.resize(5, 6);
+        t.resize(10, 4);
+        assert_eq!(row_text(&t, 0), "0123456789");
+        assert_eq!(row_text(&t, 1), "abcdef    ");
+        assert_eq!(row_text(&t, 2), "xy        ");
+    }
+    #[test]
+    fn utf8_split_across_reads() {
+        let mut t = Term::new(10, 1);
+        let mut p = Parser::new();
+        let bytes = "é你".as_bytes();
+        for b in bytes {
+            p.advance(&mut t, std::slice::from_ref(b));
+        }
+        assert_eq!(t.grid.row(0)[0].ch, 'é');
+        assert_eq!(t.grid.row(0)[1].ch, '你');
+    }
+    #[test]
+    fn long_osc_is_bounded() {
+        let mut t = Term::new(10, 1);
+        let title = "x".repeat(100_000);
+        feed(&mut t, &format!("\x1b]2;{title}\x07ok"));
+        assert!(t.title.len() <= 4096);
+        assert_eq!(row_text(&t, 0), "ok        ");
+    }
+    struct Rng(u64);
+    impl Rng {
+        fn next(&mut self) -> u64 {
+            self.0 ^= self.0 << 13;
+            self.0 ^= self.0 >> 7;
+            self.0 ^= self.0 << 17;
+            self.0
+        }
+    }
+    #[test]
+    fn random_input_never_panics() {
+        let pieces: [&[u8]; 24] = [
+            b"\x1b[",
+            b"\x1b]",
+            b"\x1b(0",
+            b"\x1b)0",
+            b"\x0e",
+            b"\x0f",
+            b"\x1b#8",
+            b"\x1b[?1049h",
+            b"\x1b[?6h",
+            b"\x1b[4h",
+            b";",
+            b":",
+            b"9999",
+            b"\x07",
+            b"\x1b\\",
+            "你".as_bytes(),
+            "\u{0301}".as_bytes(),
+            "\u{200D}".as_bytes(),
+            "👍".as_bytes(),
+            b"\r\n",
+            b"\t",
+            b"b",
+            b"\x1b[3g",
+            b"\x1b[>1u",
+        ];
+        let mut rng = Rng(0x9e3779b97f4a7c15);
+        for round in 0..300 {
+            let cols = 1 + (rng.next() % 40) as usize;
+            let rows = 1 + (rng.next() % 12) as usize;
+            let mut t = Term::new(cols, rows);
+            let mut p = Parser::new();
+            for _ in 0..400 {
+                let r = rng.next();
+                if r.is_multiple_of(3) {
+                    let b = (r >> 8) as u8;
+                    p.advance(&mut t, &[b]);
+                } else {
+                    p.advance(&mut t, pieces[(r >> 8) as usize % pieces.len()]);
+                }
+                if r.is_multiple_of(97) {
+                    t.resize(1 + (rng.next() % 40) as usize, 1 + (rng.next() % 12) as usize);
+                }
+                if r.is_multiple_of(89) {
+                    let rr = (rng.next() % t.rows() as u64) as usize;
+                    let cc = (rng.next() % t.cols() as u64) as usize;
+                    let _ = t.url_at(rr, cc);
+                    t.selection_start(0, 0, SelMode::Word);
+                    t.selection_update(rr, cc);
+                    let _ = t.selection_text();
+                }
+                t.replies.clear();
+            }
+            assert!(t.cursor.row < t.rows() && t.cursor.col < t.cols(), "round {round}");
+        }
+    }
+}
+
+#[cfg(test)]
+mod size_tests {
+    #[test]
+    fn cell_stays_small() {
+        assert_eq!(std::mem::size_of::<crate::cell::Cell>(), 16);
     }
 }

@@ -20,12 +20,8 @@ pub struct Cell {
     pub fg: Color,
     pub bg: Color,
     pub flags: u16,
+    pub extra: u16,
 }
 impl Cell {
-    pub const BLANK: Cell = Cell {
-        ch: ' ',
-        fg: Color::Default,
-        bg: Color::Default,
-        flags: 0,
-    };
+    pub const BLANK: Cell = Cell { ch: ' ', fg: Color::Default, bg: Color::Default, flags: 0, extra: 0 };
 }

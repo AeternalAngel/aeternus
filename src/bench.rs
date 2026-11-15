@@ -1,14 +1,13 @@
-use std::hint::black_box;
-use std::time::Instant;
 use crate::parser::Parser;
 use crate::term::Term;
+use std::hint::black_box;
+use std::time::Instant;
 fn plain(size: usize) -> Vec<u8> {
     let mut v = Vec::with_capacity(size + 128);
     let mut n = 0u64;
     while v.len() < size {
         v.extend_from_slice(
-            format!("linha {n:08} de texto simples com algumas palavras para encher a tela\r\n")
-                .as_bytes(),
+            format!("line {n:08} of plain text with a few words to fill the screen up\r\n").as_bytes(),
         );
         n += 1;
     }
@@ -35,7 +34,7 @@ fn tui(size: usize) -> Vec<u8> {
         for row in 1..=40 {
             v.extend_from_slice(
                 format!(
-                    "\x1b[{row};1H\x1b[K\x1b[7m {frame:05} \x1b[0m item {row:02} da lista \x1b[1;32mok\x1b[0m"
+                    "\x1b[{row};1H\x1b[K\x1b[7m {frame:05} \x1b[0m list item {row:02} \x1b[1;32mok\x1b[0m"
                 )
                 .as_bytes(),
             );
@@ -57,11 +56,7 @@ fn run(name: &str, data: &[u8]) {
         black_box(&term);
         best = best.min(t0.elapsed().as_secs_f64());
     }
-    println!(
-        "{name:<8} {:>8.1} MB/s  ({:.0} ms)",
-        data.len() as f64 / 1e6 / best,
-        best * 1000.0
-    );
+    println!("{name:<8} {:>8.1} MB/s  ({:.0} ms)", data.len() as f64 / 1e6 / best, best * 1000.0);
 }
 pub fn run_all() {
     let size = 64 << 20;

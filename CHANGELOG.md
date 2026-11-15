@@ -1,22 +1,85 @@
 # Changelog
 
-## 1.4
+All notable changes to this project are documented here. The format is based on
+[Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
+
+
+## [Unreleased]
+
+## [1.4] - 2026-11-15
 
 ### Added
 
-- Toolbar: `window.toolbar = true` shows a menu bar (Arquivo, Editar, Ver, Ajuda) below the native window frame, with a settings gear on the right that opens Preferences directly. Besides the existing actions, the menus add "Selecionar tudo", "Resetar terminal", "Tela cheia" (`F11`) and "Sobre o Aeternus".
-- Tabs: multiple shells in one window. The tab strip appears under the toolbar once there are two or more tabs, with each tab showing its own title (OSC, e.g. the shell's cwd), a close button and a `+` button for a new tab. Shortcuts: `Ctrl+Shift+T` (new tab), `Ctrl+Shift+W` (close tab), `Ctrl+Tab`/`Ctrl+Shift+Tab` and `Ctrl+PageUp`/`Ctrl+PageDown` (switch), middle-click closes a tab; the File menu also hosts "Nova aba"/"Fechar aba". Each tab keeps its own scrollback, title and PTY; the active tab is resized with the window.
-- Scrollable tab strip: when tabs don't fit, the mouse wheel over the strip scrolls it one tab at a time, `‹`/`›` buttons appear on the right edge while any tab stays hidden on either side (with hover state and a pinned `+` button) and the strip auto-follows the active tab on switch, create and close.
-- Preferences overlay with a `Simples`/`Avançado` toggle in the header. The simple mode shows only the everyday options (font, toolbar, colors); the advanced mode shows everything, grouped in labeled sections (Fonte, Janela, Terminal, Cursor, Cores) inside cards, with toggles drawn as pills whose knob slides over ~120 ms while their theme-derived colors transition. Saving writes `config.toml` and applies the changes instantly; existing comments and formatting in the file are preserved.
-- Color picker: color fields render as a swatch with the current color; clicking one opens an in-app overlay with a hue/saturation/brightness picker drawn with the renderer itself, current vs. new preview, hex and RGB readouts and Cancelar/Confirmar buttons (`Esc` cancels, `Enter` confirms). The hex field stays editable in advanced mode.
-- The `aet` companion CLI, shipped in the release archive, talks to a running instance over a Unix socket in `$XDG_RUNTIME_DIR` and targets the most recently focused instance: `aet version` prints `aeternus 1.4.0` into the active terminal (the shell prompt returns normally), `aet pref` opens Preferences and `aet reload` reloads `config.toml`. Unknown or missing arguments print a usage help.
-- "Sobre o Aeternus" prints the Aeternus ASCII art and version into the active terminal, with the prompt returning right below it. The art's accent color is derived from the configured background and its text is white on dark backgrounds and black on light ones; both are resolved every frame, so art already on screen recolors itself when the background changes.
+- Tabs: multiple shells in one window. The tab strip appears once there are two or more tabs, with each tab showing its own title, a close button and a `+` button. Default shortcuts: `Ctrl+Shift+T` (new tab), `Ctrl+Shift+W` (close tab), `Ctrl+Tab`/`Ctrl+PageDown` and `Ctrl+Shift+Tab`/`Ctrl+PageUp` (switch); middle-click closes a tab. New tabs open in the working directory of the current tab (OSC 7, or the shell's current directory).
+- Scrollable tab strip: when tabs don't fit, the mouse wheel scrolls the strip, `‹`/`›` buttons appear on the right edge and the strip follows the active tab.
+- Toolbar: `window.toolbar = true` shows a menu bar (File, Edit, View, Help) with a settings button on the right. The menus show the shortcuts actually configured in `[keybindings]`.
+- Preferences panel with Simple and Advanced modes, grouped sections, animated toggles, `Tab`/`Shift+Tab` navigation, `Enter` to save, `Esc` to cancel and paste into text fields. Saving writes `config.toml` while keeping its comments and applies the changes immediately.
+- Color picker for color fields (hue, saturation and brightness, current vs. new preview, hex and RGB readouts).
+- Colors use kitty's names and formats: `[colors]` accepts `foreground`, `background`, `selection_background`, `selection_foreground`, `cursor`, `cursor_text_color` and `color0` to `color255`, and `colors.theme` loads a kitty theme file (`.conf`, with `include` support) directly. Keys in `[colors]` override the theme, and the theme file is watched for changes. The previous `selection`, `normal` and `bright` keys still work.
+- Gamma-correct (linear) text blending like kitty, which makes light text on dark backgrounds fuller and smoother. `font.text_composition_strategy` takes kitty's values: `"platform"` (default), `"legacy"` (the previous look) or `"<gamma> <contrast>"`.
+- OSC 4 works for all 256 palette entries, and color queries return the configured palette.
+- Background transparency: `window.opacity` (0.0 to 1.0, default 1.0), also in Preferences and applied live. As in kitty, only the default background becomes transparent; text, the cursor, the selection and cells with an explicit background color stay solid. Blur is up to the compositor (for example a Hyprland `blur` rule).
+- Cursor trail inspired by kitty: `cursor.trail` (milliseconds the cursor must rest before a move animates; `0` disables it), `cursor.trail_decay = [fast, slow]`, `cursor.trail_start_threshold` (cells) and `cursor.trail_color`. Also available in Preferences.
+- `aet` companion command shipped next to `aeternus`: `aet version`, `aet pref` and `aet reload` act on the most recently focused window. `aet --help` and `aet --version` are available.
+- "About Aeternus" prints the Aeternus art and version into the active terminal.
+- Clickable links: `Ctrl+click` opens URLs (`http`, `https`, `file`, `ftp`, `mailto`, `ssh`) and OSC 8 hyperlinks with `xdg-open`; use `Ctrl+Shift+click` when the program captures the mouse. Hyperlinks are underlined and the pointer changes over links while `Ctrl` is held.
+- Combining marks (e.g. decomposed accents), emoji skin-tone modifiers and ZWJ emoji sequences are kept in the same cell and rendered as one cluster; copying keeps them.
+- DEC special graphics charset (`ESC ( 0`, `ESC ) 0`, SI/SO) for line drawing, and the UK charset.
+- Escape sequences: REP (`CSI b`), tab stops (HTS, TBC, CHT `CSI I`, CBT `CSI Z`), insert mode (IRM, `CSI 4 h`), newline mode (LNM, `CSI 20 h`), origin mode (DECOM, `CSI ? 6 h`), DECALN (`ESC # 8`), DECSTR (`CSI ! p`), ANSI DECRQM (`CSI Ps $ p`), mode 1048, `CSI 14 t`/`CSI 16 t` pixel size reports, OSC 4 color queries and SGR `4:0` to turn underline off.
+- Kitty keyboard protocol, "disambiguate escape codes" level (push, pop, set and query with `CSI > u`, `CSI < u`, `CSI = u`, `CSI ? u`); the main and alternate screens keep separate stacks.
+- Bell: BEL flashes the window (`bell.visual`) and requests attention when the window is not focused (`bell.urgent`).
+- `terminal.smart_copy_paste` (default `false`): when on, `Ctrl+C` copies if there is a selection and `Ctrl+V` pastes.
+- New keybinding actions: `new_tab`, `close_tab`, `next_tab`, `prev_tab`, `fullscreen` and `preferences`. Every built-in shortcut now goes through `[keybindings]`, and an empty list (`[]`) disables an action.
+- `F11` or View > Fullscreen toggles borderless fullscreen.
+- Command line: `-h`/`--help`, `-V`/`--version` and `-c`/`--config`. Unknown arguments are reported instead of ignored.
+- Log file at `~/.local/state/aeternus/aeternus.log` (`$XDG_STATE_HOME`). Fatal startup errors (no GPU, no display, shell not found) also show a desktop notification.
+- `TERM_PROGRAM=aeternus` and `TERM_PROGRAM_VERSION` are exported to the shell, and the PTY reports its size in pixels.
+- Packaging: `install.sh` (user or system install, `--uninstall`, `DESTDIR`), desktop entry and AppStream metadata with the `io.github.AeternalAngel.Aeternus` ID, man pages for `aeternus` and `aet`, bash/zsh/fish completions and AUR `PKGBUILD`s. Releases now ship `.tar.gz` (with the desktop entry, icons and installer), `.deb`, `.rpm` and AppImage for x86_64 and aarch64.
+
+### Changed
+
+- The interface, messages, the configuration template and the `aet` output are now in English.
+- The default font is `monospace`, resolved through fontconfig to the system's monospace font; a warning is logged when the configured font is not installed.
+- `terminal.shell` is parsed like a shell command line, so quotes and paths with spaces work (e.g. `"\"/opt/my shell/zsh\" -l"`).
+- `Ctrl+C` and `Ctrl+V` are sent to the program by default (they no longer copy or paste); see `terminal.smart_copy_paste`.
+- Shortcuts bound to scrolling (`Shift+PageUp` and friends) are passed to the program on the alternate screen instead of being swallowed.
+- The window uses the `io.github.AeternalAngel.Aeternus` app ID, so it matches its desktop entry and icon.
+- `config.toml` is saved atomically (temporary file and rename), keeps its permissions and follows symlinks.
+- When `XDG_RUNTIME_DIR` is not set, the `aet` socket goes to a private per-user directory instead of `/tmp`.
+- `CSI A`/`B`/`E`/`F` stop at the scroll region margins, as in xterm.
+- Primary device attributes report VT220 with ANSI color (`CSI ? 62 ; 22 c`).
+- Dependencies updated: wgpu 30, cosmic-text 0.19, portable-pty 0.9, unicode-width 0.2, toml 1, toml_edit 0.25, pollster 1.
+- Release builds use `opt-level = 3`, thin LTO, one codegen unit and are stripped (the binary went from about 18 MB to 12 MB).
+- The renderer tries a software adapter before giving up when no hardware GPU is found, and honors wgpu environment overrides such as `WGPU_BACKEND=gl`.
+- The window surface always uses an 8-bit (or 10-bit) non-sRGB format, so colors are shown exactly as configured on drivers that also offer 16-bit float surfaces.
+- The code is split into a library and modules (`app`, `input`, `ipc`, `render/*`) and the minimum supported Rust version is 1.90.
+
+### Fixed
+
+- Closed tabs and shells that exited on their own were left as zombie processes until Aeternus quit.
+- Nerd Font icons and other symbols wider than a cell (common with the non-Mono "NF" font variants and with fallback fonts) overlapped the neighboring characters. Like kitty, such symbols are now scaled down and centered in their cell, or use two cells when followed by a space; powerline separators keep their natural shape.
+- Output printed right after startup was pushed into the scrollback when the window was resized (for example by a tiling compositor), because the reflow counted the empty rows below the cursor as content.
+- The `aet` socket and the `.last` file were left behind when the last shell exited, and after a crash.
+- The app no longer calls `std::process::exit`; it leaves the event loop and tears down tabs, the GPU and the socket in order.
+- `aet version` printed a fixed `1.4.0` instead of the real version.
+- The "About" art left the text color changed for the shell output that followed it.
+- Built-in shortcuts ignored the `[keybindings]` configuration and could not be disabled or remapped.
+- Zero-width characters (combining accents, ZWJ, variation selectors) were dropped.
+- Erasing part of a line (`CSI K`, `CSI J`) over half of a wide character left the other half behind.
+- Reflow kept stale wrap markers, so text could join the wrong line after several resizes.
+- Pasting stripped `ESC` but not the 8-bit CSI (`U+009B`) from bracketed paste.
+- The menu panel could open partly outside a narrow window.
+- The Preferences text fields showed the beginning of long values instead of the end being typed.
+- The toolbar height did not follow display scale changes, and the grid was not resized right after a scale change.
+- The PTY reader thread busy-waited (`yield_now`) while the renderer held the terminal; it now parks.
+- Window-less errors (no GPU adapter, no display, invalid shell) panicked instead of reporting the problem.
 
 ### Removed
 
 - Windows support: platform code (ConPTY-side `cmd.exe` fallback, `%APPDATA%` config path, `aeternus.log`, DWM/dark-mode helpers, `windows_subsystem`), the `cfg(windows)` dependency, CI job and release packaging are gone. Aeternus is Linux-only (Wayland/X11).
+- The Portuguese part of this file moved to [CHANGELOG.pt-BR.md](CHANGELOG.pt-BR.md).
 
-## 1.3
+## [1.3] - 2026-11-12
 
 ### Added
 
@@ -30,7 +93,7 @@
 
 - Changed resizing on the main screen to reflow text instead of just cropping or padding it; the alternate screen (full-screen apps) and height-only resizes are unaffected.
 
-## 1.2.1
+## [1.2.1] - 2026-11-10
 
 ### Added
 
@@ -50,7 +113,7 @@
 - On Windows, config errors are written to `aeternus.log` next to `config.toml`, since release builds have no console.
 - README no longer claims hot-reload on save, an error banner or color emoji.
 
-## 1.2
+## [1.2] - 2026-11-09
 
 ### Added
 
@@ -71,69 +134,12 @@
 - The glyph atlas resets and keeps working once full, instead of permanently blanking new glyphs.
 - No console window flashes behind the app on Windows release builds.
 
-## 1.1
+## [1.1] - 2026-11-08
 
 Initial Windows support.
 
----
-
-# Histórico de mudanças
-
-## 1.3
-
-### Adicionado
-
-- Adicionado reflow ao redimensionar: linhas quebradas são rejuntadas e requebradas na nova largura usando a flag `WRAPLINE` já existente, em vez de serem cortadas ou preenchidas.
-- Adicionada atualização de DPI em tempo real: mover a janela para uma tela com escala diferente reajusta a fonte e a grade na hora.
-- Adicionado desenho de emoji coloridos: o atlas de glifos agora guarda dados RGBA, então glifos coloridos do cosmic-text são desenhados com a própria cor em vez de tingidos pela cor do texto.
-- Adicionados atalhos configuráveis através de uma nova seção `[keybindings]` na configuração (`copy`, `paste`, `paste_primary`, `reload_config`, `zoom_in`, `zoom_out`, `zoom_reset`, `scroll_page_up`, `scroll_page_down`, `scroll_to_top`, `scroll_to_bottom`), cada um aceitando uma lista de combinações de tecla.
-- Adicionada recarga automática do `config.toml` quando ele muda no disco, verificada a cada 1 segundo; Ctrl+Shift+R continua funcionando também.
-
-### Alterado
-
-- Alterado o redimensionamento na tela principal para reflowar o texto em vez de só cortar ou preencher; a tela alternativa (apps em tela cheia) e redimensionamentos só de altura não são afetados.
-
-## 1.2.1
-
-### Adicionado
-
-- Opção de configuração `terminal.osc52` (padrão `true`) para ligar ou desligar a escrita no clipboard via OSC 52.
-- Opções de linha de comando `--version` e `--config <caminho>`.
-- Modo de keypad de aplicação (`ESC =` / `ESC >`).
-- Ctrl+Espaço envia NUL (0x00) e Ctrl+/ envia 0x1f.
-
-### Corrigido
-
-- Glifos não recebem mais coordenadas de textura erradas quando o atlas é reiniciado no meio de um frame.
-- A saída sincronizada (DEC 2026) é desligada à força após 150 ms, para que um programa que nunca a desliga não congele a tela.
-- Payloads de OSC 52 com até 1 MiB de texto decodificado são aceitos; maiores são ignorados em vez de truncados.
-- Sobrescrever, apagar, inserir ou excluir sobre metade de um caractere largo limpa a outra metade, e redimensionar não deixa mais metade de um par.
-- Fundo, seleção e cursor em bloco cobrem as duas células de um caractere largo.
-- XTVERSION informa a versão real em vez de um "aeternus 1.1" fixo.
-- No Windows, erros de configuração são gravados em `aeternus.log` ao lado do `config.toml`, já que builds release não têm console.
-- O README não afirma mais recarga ao salvar, faixa de erros nem emoji colorido.
-
-## 1.2
-
-### Adicionado
-
-- `terminal.shell` aceita argumentos (ex.: `"bash -l"`).
-- Opção de configuração `terminal.working_directory` para definir o diretório inicial.
-- Modo de saída sincronizada (modo privado DEC 2026).
-- Respostas a DECRQM (`CSI ? Ps $ p`) e XTVERSION (`CSI > q`).
-- Definição e redefinição de cores via OSC 4/10/11/12, e escrita no clipboard via OSC 52.
-- Subparâmetros SGR separados por `:` (ex.: `4:3`, `38:2::r:g:b`); SGR 58/59 são lidos e ignorados em vez de quebrar o alinhamento dos parâmetros.
-- Tratamento de largura de caracteres largos (CJK, emoji), com seleção e cópia ignorando a célula de continuação.
-
-### Corrigido
-
-- Falha de segmentação ao fechar, causada pela corrida entre o encerramento da GPU/clipboard e a thread de leitura do PTY.
-- Alt+Esquerda/Direita agora move o cursor por palavra no shell.
-- O caminho da configuração no Windows agora segue `%APPDATA%\aeternus\config.toml` em vez do caminho do Linux.
-- O copiar-ao-selecionar (soltar o botão esquerdo do mouse) não sobrescreve mais o clipboard no Windows.
-- O atlas de glifos é reiniciado e continua funcionando quando enche, em vez de deixar glifos novos em branco para sempre.
-- Nenhuma janela de console pisca atrás do app em builds release no Windows.
-
-## 1.1
-
-Suporte inicial ao Windows.
+[Unreleased]: https://github.com/AeternalAngel/aeternus/compare/v1.4.0-pre1...HEAD
+[1.4]: https://github.com/AeternalAngel/aeternus/compare/v1.3.0...v1.4.0-pre1
+[1.3]: https://github.com/AeternalAngel/aeternus/compare/v1.2.1...v1.3.0
+[1.2.1]: https://github.com/AeternalAngel/aeternus/compare/v1.2.0...v1.2.1
+[1.2]: https://github.com/AeternalAngel/aeternus/releases/tag/v1.2.0

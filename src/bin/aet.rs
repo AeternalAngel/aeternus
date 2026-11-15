@@ -5,37 +5,31 @@ use std::os::unix::net::UnixStream;
 use std::path::PathBuf;
 use std::time::{Duration, SystemTime};
 
+use aeternus::ipc::{self, Command};
+
 fn usage() {
-    eprintln!("uso: aet [version|pref|reload]");
-    eprintln!("  version  mostra a versão do aeternus no terminal ativo");
-    eprintln!("  pref     abre as preferências da instância focada");
-    eprintln!("  reload   recarrega o config.toml da instância focada");
-}
-
-fn sanitize(tag: &str) -> String {
-    tag.chars().map(|c| if c.is_ascii_alphanumeric() { c } else { '_' }).collect()
-}
-
-fn display_tag() -> String {
-    let d = env::var("WAYLAND_DISPLAY")
-        .or_else(|_| env::var("DISPLAY"))
-        .unwrap_or_else(|_| String::from("default"));
-    sanitize(&d)
+    eprintln!("usage: aet <command>");
+    eprintln!();
+    eprintln!("commands:");
+    for (name, _, help) in Command::ALL {
+        eprintln!("  {name:<9}{help}");
+    }
+    eprintln!();
+    eprintln!("options:");
+    eprintln!("  -h, --help     show this help");
+    eprintln!("  -V, --version  print the aet version");
 }
 
 fn candidates() -> Vec<PathBuf> {
-    let dir = env::var_os("XDG_RUNTIME_DIR")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from("/tmp"));
-    let tag = display_tag();
+    let dir = ipc::runtime_dir();
     let mut out = Vec::new();
-    if let Ok(last) = fs::read_to_string(dir.join(format!("aeternus-{tag}.last"))) {
+    if let Ok(last) = fs::read_to_string(ipc::last_path()) {
         let p = PathBuf::from(last.trim());
-        if p.is_file() {
+        if p.exists() {
             out.push(p);
         }
     }
-    let prefix = format!("aeternus-{tag}-");
+    let prefix = ipc::socket_prefix();
     let mut socks: Vec<(SystemTime, PathBuf)> = fs::read_dir(&dir)
         .into_iter()
         .flatten()
@@ -49,41 +43,44 @@ fn candidates() -> Vec<PathBuf> {
             Some((mt, e.path()))
         })
         .collect();
-    socks.sort_by(|a, b| b.0.cmp(&a.0));
-    out.extend(socks.into_iter().map(|(_, p)| p));
+    socks.sort_by_key(|s| std::cmp::Reverse(s.0));
+    for (_, p) in socks {
+        if !out.contains(&p) {
+            out.push(p);
+        }
+    }
     out
 }
 
-fn run(cmd: &str) -> Result<(), String> {
+fn run(cmd: Command) -> Result<(), String> {
     let list = candidates();
     if list.is_empty() {
-        return Err(String::from("nenhuma instância do aeternus em execução"));
+        return Err(String::from("no running Aeternus instance found"));
     }
-    let mut last = String::from("nenhuma instância respondeu");
+    let mut last = String::from("no instance answered");
     for path in list {
         let Ok(mut stream) = UnixStream::connect(&path) else {
-            last = format!("sem resposta em {}", path.display());
+            last = format!("no answer from {}", path.display());
+            let _ = fs::remove_file(&path);
             continue;
         };
         let _ = stream.set_read_timeout(Some(Duration::from_secs(3)));
         let _ = stream.set_write_timeout(Some(Duration::from_secs(3)));
-        let mut msg = Vec::new();
-        msg.extend_from_slice(cmd.as_bytes());
-        msg.push(b'\n');
-        if stream.write_all(&msg).is_err() {
-            last = format!("falha ao enviar para {}", path.display());
+        let msg = format!("{}\n", cmd.name());
+        if stream.write_all(msg.as_bytes()).is_err() {
+            last = format!("could not send to {}", path.display());
             continue;
         }
         let mut r = BufReader::new(stream);
         let mut line = String::new();
         match r.read_line(&mut line) {
-            Ok(0) => last = format!("sem resposta de {}", path.display()),
+            Ok(0) => last = format!("no answer from {}", path.display()),
             Ok(_) => {
                 let reply = line.trim_end();
                 if reply == "ok" {
                     return Ok(());
                 }
-                return Err(reply.strip_prefix("err ").unwrap_or("erro do aeternus").to_string());
+                return Err(reply.strip_prefix("err ").unwrap_or("Aeternus error").to_string());
             }
             Err(e) => last = e.to_string(),
         }
@@ -92,33 +89,36 @@ fn run(cmd: &str) -> Result<(), String> {
 }
 
 fn main() {
-    let arg = env::args().nth(1);
-    match arg.as_deref() {
-        Some("version") | Some("pref") | Some("reload") => {}
-        Some(_) => {
-            eprintln!("aet: comando desconhecido");
+    let args: Vec<String> = env::args().skip(1).collect();
+    let cmd = match args.first().map(String::as_str) {
+        Some("-h" | "--help" | "help") => {
             usage();
-            std::process::exit(2);
+            return;
         }
+        Some("-V" | "--version") => {
+            println!("aet {}", env!("CARGO_PKG_VERSION"));
+            return;
+        }
+        Some(s) => match Command::parse(s) {
+            Some(c) if args.len() == 1 => c,
+            Some(_) => {
+                eprintln!("aet: too many arguments");
+                usage();
+                std::process::exit(2);
+            }
+            None => {
+                eprintln!("aet: unknown command: {s}");
+                usage();
+                std::process::exit(2);
+            }
+        },
         None => {
             usage();
             std::process::exit(2);
         }
-    }
-    let cmd = arg.unwrap();
-    if let Err(e) = run(&cmd) {
+    };
+    if let Err(e) = run(cmd) {
         eprintln!("aet: {e}");
         std::process::exit(1);
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::sanitize;
-    #[test]
-    fn tag_sanitize() {
-        assert_eq!(sanitize("wayland-1"), "wayland_1");
-        assert_eq!(sanitize(":0"), "_0");
-        assert_eq!(sanitize("ab"), "ab");
     }
 }
