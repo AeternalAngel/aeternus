@@ -1,0 +1,7 @@
+#compdef aeternus
+
+_arguments \
+    '(-c --config)'{-c,--config}'[use this configuration file]:config file:_files' \
+    '--bench[run the parser benchmark]' \
+    '(- *)'{-h,--help}'[show help]' \
+    '(- *)'{-V,--version}'[print the version]'

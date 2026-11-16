@@ -1,0 +1,27 @@
+pkgname=aeternus-bin
+pkgver=1.4.0
+pkgrel=1
+pkgdesc='GPU-accelerated terminal emulator written in Rust (prebuilt binary)'
+arch=('x86_64' 'aarch64')
+url='https://github.com/AeternalAngel/aeternus'
+license=('MIT')
+depends=('gcc-libs' 'glibc' 'libxkbcommon' 'vulkan-icd-loader')
+optdepends=(
+  'fontconfig: resolve the system monospace font'
+  'xdg-utils: open links with Ctrl+click'
+  'libx11: X11 support'
+  'wayland: Wayland support'
+)
+provides=('aeternus')
+conflicts=('aeternus')
+_short=${pkgver%.0}
+source_x86_64=("$url/releases/download/v$pkgver/aeternus-$_short-linux-x86_64.tar.gz")
+source_aarch64=("$url/releases/download/v$pkgver/aeternus-$_short-linux-aarch64.tar.gz")
+sha256sums_x86_64=('SKIP')
+sha256sums_aarch64=('SKIP')
+
+package() {
+  cd "aeternus-$_short-linux-$CARCH"
+  DESTDIR="$pkgdir" ./install.sh --prefix /usr
+  install -Dm644 LICENSE "$pkgdir/usr/share/licenses/aeternus/LICENSE"
+}

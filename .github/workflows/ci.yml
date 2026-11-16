@@ -4,12 +4,65 @@ on:
     branches: [main]
   pull_request:
 
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
 jobs:
+  fmt:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - run: cargo fmt --all --check
+
+  clippy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo clippy --locked --all-targets -- -D warnings
+
   test:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
-      - run: cargo build --release
-      - run: cargo test
+      - run: cargo test --locked
+      - run: cargo build --locked --release
+      - run: ./target/release/aeternus --version && ./target/release/aet --version
+
+  msrv:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.90
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo check --locked --all-targets
+
+  deny:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: EmbarkStudios/cargo-deny-action@v2
+
+  packaging:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install validators
+        run: sudo apt-get update && sudo apt-get install -y desktop-file-utils appstream shellcheck groff-base
+      - run: desktop-file-validate packaging/io.github.AeternalAngel.Aeternus.desktop
+      - run: appstreamcli validate --no-net packaging/io.github.AeternalAngel.Aeternus.metainfo.xml
+      - run: shellcheck install.sh
+      - run: |
+          for f in packaging/man/*.1; do groff -man -Tutf8 -ww "$f" > /dev/null; done
+      - run: bash -n packaging/completions/aet.bash && bash -n packaging/completions/aeternus.bash

@@ -1,0 +1,68 @@
+name: Bug report
+description: Something does not work as expected
+labels: [bug]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened?
+      description: What did you do, what did you expect and what happened instead?
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Open Aeternus
+        2. Run `...`
+        3. See ...
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Aeternus version
+      description: Output of `aeternus --version`
+    validations:
+      required: true
+  - type: input
+    id: distro
+    attributes:
+      label: Distribution
+      placeholder: Arch Linux, Ubuntu 24.04, Fedora 41...
+    validations:
+      required: true
+  - type: dropdown
+    id: session
+    attributes:
+      label: Display server
+      options:
+        - Wayland
+        - X11
+        - XWayland
+    validations:
+      required: true
+  - type: input
+    id: compositor
+    attributes:
+      label: Desktop / compositor
+      placeholder: GNOME 47, KDE Plasma 6, Hyprland, Sway...
+  - type: input
+    id: gpu
+    attributes:
+      label: GPU and driver
+      description: The first line of the log shows the adapter Aeternus picked
+      placeholder: AMD RX 6600 (RADV), Intel UHD 620 (Mesa), NVIDIA 565...
+  - type: textarea
+    id: log
+    attributes:
+      label: Log
+      description: Relevant lines from `~/.local/state/aeternus/aeternus.log`
+      render: text
+  - type: textarea
+    id: config
+    attributes:
+      label: Configuration
+      description: Your `config.toml`, if you changed it
+      render: toml

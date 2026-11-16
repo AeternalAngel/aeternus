@@ -1,0 +1,85 @@
+.TH AETERNUS 1 "2026-11-15" "aeternus 1.4" "User Commands"
+.SH NAME
+aeternus \- GPU-accelerated terminal emulator
+.SH SYNOPSIS
+.B aeternus
+[\fB\-c\fR \fIpath\fR]
+[\fB\-\-bench\fR]
+[\fB\-h\fR]
+[\fB\-V\fR]
+.SH DESCRIPTION
+.B aeternus
+is a terminal emulator for Linux rendered on the GPU with wgpu. It runs on Wayland and X11,
+supports tabs, truecolor, wide characters, color emoji, combining marks, OSC 8 hyperlinks,
+clickable URLs and an optional cursor trail animation.
+.SH OPTIONS
+.TP
+.BR \-c ", " \-\-config " " \fIpath\fR
+Use \fIpath\fR as the configuration file instead of the default one.
+.TP
+.B \-\-bench
+Run the built-in parser benchmark and exit.
+.TP
+.BR \-h ", " \-\-help
+Print a short help and exit.
+.TP
+.BR \-V ", " \-\-version
+Print the version and exit.
+.SH CONFIGURATION
+The configuration lives in
+.I $XDG_CONFIG_HOME/aeternus/config.toml
+(usually
+.IR ~/.config/aeternus/config.toml ).
+A commented template is written on first run. The file is reloaded automatically when it changes;
+on errors the previous configuration is kept and the error is logged.
+Colors use kitty's names (\fBforeground\fR, \fBbackground\fR, \fBcolor0\fR to \fBcolor255\fR...) and \fBtheme\fR in \fB[colors]\fR loads a kitty theme file.
+Background transparency is set with \fBopacity\fR in \fB[window]\fR (0.0 to 1.0).
+Sections: \fB[font]\fR, \fB[window]\fR, \fB[terminal]\fR, \fB[cursor]\fR, \fB[bell]\fR,
+\fB[colors]\fR and \fB[keybindings]\fR.
+.SH KEYBINDINGS
+Defaults, all configurable in \fB[keybindings]\fR (an empty list disables an action):
+.TP
+.B Ctrl+Shift+C / Ctrl+Shift+V
+Copy / paste.
+.TP
+.B Shift+Insert
+Paste the primary selection.
+.TP
+.B Ctrl+Shift+T / Ctrl+Shift+W
+New tab / close tab.
+.TP
+.B Ctrl+Tab, Ctrl+PageDown / Ctrl+Shift+Tab, Ctrl+PageUp
+Next / previous tab.
+.TP
+.B Ctrl+Shift+= / Ctrl+Shift+\- / Ctrl+Shift+0
+Zoom in / out / reset (also Ctrl+mouse wheel).
+.TP
+.B Shift+PageUp / Shift+PageDown / Shift+Home / Shift+End
+Scroll the history.
+.TP
+.B Ctrl+Shift+R
+Reload the configuration.
+.TP
+.B F11
+Toggle fullscreen.
+.TP
+.B Ctrl+click
+Open the URL or hyperlink under the mouse (Ctrl+Shift+click when the program captures the mouse).
+.SH FILES
+.TP
+.I ~/.config/aeternus/config.toml
+Configuration file.
+.TP
+.I ~/.local/state/aeternus/aeternus.log
+Log file with errors and warnings.
+.TP
+.I $XDG_RUNTIME_DIR/aeternus-*.sock
+Control sockets used by
+.BR aet (1).
+.SH ENVIRONMENT
+The shell is started with \fBTERM=xterm-256color\fR, \fBCOLORTERM=truecolor\fR,
+\fBTERM_PROGRAM=aeternus\fR and \fBTERM_PROGRAM_VERSION\fR set.
+.SH SEE ALSO
+.BR aet (1)
+.SH BUGS
+https://github.com/AeternalAngel/aeternus/issues

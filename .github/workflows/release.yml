@@ -6,73 +6,130 @@ on:
 permissions:
   contents: write
 
+env:
+  CARGO_TERM_COLOR: always
+
 jobs:
   linux:
-    runs-on: ubuntu-latest
-    container: debian:12   # glibc 2.36
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x86_64
+            runner: ubuntu-latest
+          - arch: aarch64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    container: debian:12
     steps:
-      - name: Dependências
+      - name: Dependencies
         run: |
           apt-get update
-          apt-get install -y curl ca-certificates git build-essential pkg-config \
-            libfontconfig1-dev libxkbcommon-dev libwayland-dev libx11-dev \
-            libxcb1-dev libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev
+          apt-get install -y curl ca-certificates git build-essential pkg-config file \
+            libxkbcommon-dev libwayland-dev libx11-dev desktop-file-utils
       - uses: actions/checkout@v4
-      - name: Instalar Rust
+      - name: Install Rust
         run: |
           curl -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal
           echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
-      - name: Conferir tag x Cargo.toml
+      - name: Version names
+        id: ver
         run: |
-          TAG=${GITHUB_REF_NAME#v}
-          case "$TAG" in
-            [0-9][0-9]w[0-9][0-9][a-z])
-              echo "Snapshot $TAG: pulando checagem do Cargo"; exit 0 ;;
-          esac
-          CARGO=$(grep -m1 '^version' Cargo.toml | cut -d'"' -f2)
-          [ "$TAG" = "$CARGO" ] || { echo "Tag $TAG != Cargo.toml $CARGO"; exit 1; }
-      - name: Compilar e empacotar
-        run: |
-          cargo build --release
           V=${GITHUB_REF_NAME#v}
           case "$V" in
-            [0-9][0-9]w[0-9][0-9][a-z]) S=$V ;;
-            *) S=$(echo "$V" | sed -E 's/^([0-9]+\.[0-9]+)\.0/\1/') ;;
+            [0-9][0-9]w[0-9][0-9][a-z]) S=$V; SNAP=1 ;;
+            *) S=$(echo "$V" | sed -E 's/^([0-9]+\.[0-9]+)\.0/\1/'); SNAP=0 ;;
           esac
-          mkdir -p dist
-          tar czf "dist/aeternus-$S-linux-x86_64.tar.gz" \
-            -C target/release aeternus aet -C ../.. LICENSE
+          echo "v=$V" >> "$GITHUB_OUTPUT"
+          echo "short=$S" >> "$GITHUB_OUTPUT"
+          echo "snapshot=$SNAP" >> "$GITHUB_OUTPUT"
+      - name: Check tag against Cargo.toml
+        if: steps.ver.outputs.snapshot == '0'
+        run: |
+          CARGO=$(grep -m1 '^version' Cargo.toml | cut -d'"' -f2)
+          [ "${{ steps.ver.outputs.v }}" = "$CARGO" ] || { echo "Tag ${{ steps.ver.outputs.v }} != Cargo.toml $CARGO"; exit 1; }
+      - name: Test
+        run: cargo test --locked --lib
+      - name: Build
+        run: cargo build --locked --release
+      - name: Tarball
+        run: |
+          N="aeternus-${{ steps.ver.outputs.short }}-linux-${{ matrix.arch }}"
+          mkdir -p "dist/$N/packaging"
+          cp target/release/aeternus target/release/aet install.sh LICENSE README.md CHANGELOG.md "dist/$N/"
+          cp -r packaging/icons packaging/man packaging/completions \
+            packaging/io.github.AeternalAngel.Aeternus.desktop \
+            packaging/io.github.AeternalAngel.Aeternus.metainfo.xml "dist/$N/packaging/"
+          tar czf "dist/$N.tar.gz" -C dist "$N"
+          rm -rf "dist/$N"
+      - name: Debian package
+        run: |
+          cargo install cargo-deb --locked
+          cargo deb --no-build --no-strip --output dist/
+      - name: RPM package
+        run: |
+          cargo install cargo-generate-rpm --locked
+          cargo generate-rpm --output dist/
+      - name: AppImage
+        run: |
+          A=${{ matrix.arch }}
+          APPDIR=AppDir
+          mkdir -p $APPDIR/usr/bin $APPDIR/usr/share/applications $APPDIR/usr/share/metainfo
+          cp target/release/aeternus target/release/aet $APPDIR/usr/bin/
+          cp packaging/io.github.AeternalAngel.Aeternus.desktop $APPDIR/usr/share/applications/
+          cp packaging/io.github.AeternalAngel.Aeternus.metainfo.xml \
+            $APPDIR/usr/share/metainfo/io.github.AeternalAngel.Aeternus.appdata.xml
+          cp -r packaging/icons $APPDIR/usr/share/
+          cp packaging/io.github.AeternalAngel.Aeternus.desktop $APPDIR/
+          cp packaging/icons/hicolor/256x256/apps/io.github.AeternalAngel.Aeternus.png $APPDIR/
+          ln -s usr/bin/aeternus $APPDIR/AppRun
+          curl -sSLo appimagetool "https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-$A.AppImage"
+          chmod +x appimagetool
+          ARCH=$A ./appimagetool --appimage-extract-and-run --no-appstream $APPDIR \
+            "dist/aeternus-${{ steps.ver.outputs.short }}-$A.AppImage"
       - uses: actions/upload-artifact@v4
         with:
-          name: linux
+          name: linux-${{ matrix.arch }}
           path: dist/*
 
   publish:
     needs: [linux]
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
         with:
           path: dist
           merge-multiple: true
-      - name: Checksums, nome curto e prerelease
+      - name: Checksums, notes and prerelease flag
         id: ver
         run: |
-          cd dist && sha256sum * > SHA256SUMS
           V=${GITHUB_REF_NAME#v}
           case "$V" in
             [0-9][0-9]w[0-9][0-9][a-z]) S=$V ;;
             *) S=$(echo "$V" | sed -E 's/^([0-9]+\.[0-9]+)\.0/\1/') ;;
           esac
           case "$V" in
-            *-pre*|[0-9][0-9]w[0-9][0-9][a-z]) PRE=true ;;
+            *-pre*|*-rc*|[0-9][0-9]w[0-9][0-9][a-z]) PRE=true ;;
             *) PRE=false ;;
           esac
+          (cd dist && sha256sum * > SHA256SUMS)
+          BASE=${S%%-*}
+          for key in "$S" "$BASE"; do
+            awk -v k="$key" '
+              index($0, "## [" k "]") == 1 { on = 1; next }
+              on && /^## \[/ { exit }
+              on { print }
+            ' CHANGELOG.md > notes.md
+            [ -s notes.md ] && break
+          done
+          [ -s notes.md ] || echo "See CHANGELOG.md." > notes.md
           echo "short=$S" >> "$GITHUB_OUTPUT"
           echo "pre=$PRE" >> "$GITHUB_OUTPUT"
       - uses: softprops/action-gh-release@v2
         with:
           name: Aeternus ${{ steps.ver.outputs.short }}
           prerelease: ${{ steps.ver.outputs.pre }}
+          body_path: notes.md
           generate_release_notes: true
           files: dist/*

@@ -1,0 +1,42 @@
+pkgname=aeternus
+pkgver=1.4.0
+pkgrel=1
+pkgdesc='GPU-accelerated terminal emulator written in Rust'
+arch=('x86_64' 'aarch64')
+url='https://github.com/AeternalAngel/aeternus'
+license=('MIT')
+depends=('gcc-libs' 'glibc' 'libxkbcommon' 'vulkan-icd-loader')
+optdepends=(
+  'fontconfig: resolve the system monospace font'
+  'xdg-utils: open links with Ctrl+click'
+  'libx11: X11 support'
+  'wayland: Wayland support'
+)
+makedepends=('cargo')
+source=("$pkgname-$pkgver.tar.gz::$url/archive/refs/tags/v$pkgver.tar.gz")
+sha256sums=('SKIP')
+
+prepare() {
+  cd "$pkgname-$pkgver"
+  export RUSTUP_TOOLCHAIN=stable
+  cargo fetch --locked --target "$(rustc -vV | sed -n 's/host: //p')"
+}
+
+build() {
+  cd "$pkgname-$pkgver"
+  export RUSTUP_TOOLCHAIN=stable
+  export CARGO_TARGET_DIR=target
+  cargo build --frozen --release
+}
+
+check() {
+  cd "$pkgname-$pkgver"
+  export RUSTUP_TOOLCHAIN=stable
+  cargo test --frozen --lib
+}
+
+package() {
+  cd "$pkgname-$pkgver"
+  DESTDIR="$pkgdir" ./install.sh --prefix /usr
+  install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+}

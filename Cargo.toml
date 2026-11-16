@@ -1,29 +1,106 @@
 [package]
 name = "aeternus"
-description = "Emulador de terminal em Rust"
-license = "MIT"
-repository = "https://github.com/AeternalAngel/aeternus"
-version = "1.4.0-pre1"
+description = "A GPU-accelerated terminal emulator for Linux written in Rust"
+version = "1.4.0"
+authors = ["Gabriel (AeternalAngel)"]
 edition = "2021"
+rust-version = "1.90"
+license = "MIT"
+readme = "README.md"
+homepage = "https://github.com/AeternalAngel/aeternus"
+repository = "https://github.com/AeternalAngel/aeternus"
+keywords = ["terminal", "terminal-emulator", "gpu", "wgpu", "wayland"]
+categories = ["command-line-utilities"]
+default-run = "aeternus"
+exclude = ["/docs/*.png", "/.github", "/packaging/aur", "/fuzz"]
 
 [dependencies]
-portable-pty = "0.8"
-winit = "0.30"
-wgpu = "22"
-cosmic-text = "0.12"
-bytemuck = { version = "1", features = ["derive"] }
-unicode-width = "0.1"
-pollster = "0.3"
-serde = { version = "1", features = ["derive"] }
-toml = "0.8"
-toml_edit = "0.22"
-
-[target.'cfg(unix)'.dependencies]
 arboard = { version = "3.4", default-features = false, features = ["wayland-data-control"] }
+bytemuck = { version = "1", features = ["derive"] }
+cosmic-text = "0.19"
+pollster = "1"
+portable-pty = "0.9"
+serde = { version = "1", features = ["derive"] }
+shell-words = "1"
+signal-hook = "0.4"
+toml = "1"
+toml_edit = "0.25"
+unicode-width = "0.2"
+wgpu = "30"
+winit = "0.30.13"
+
+[[bin]]
+name = "aeternus"
+path = "src/main.rs"
 
 [[bin]]
 name = "aet"
 path = "src/bin/aet.rs"
 
 [profile.release]
-opt-level = 2
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+strip = true
+
+[package.metadata.deb]
+maintainer = "Gabriel (AeternalAngel) <83485448+AeternalAngel@users.noreply.github.com>"
+section = "x11"
+priority = "optional"
+depends = "$auto, libxkbcommon0"
+recommends = "fontconfig, libvulkan1, mesa-vulkan-drivers, xdg-utils, libwayland-client0, libx11-xcb1"
+extended-description = """\
+Aeternus is a GPU-accelerated terminal emulator for Linux (Wayland and X11) \
+with tabs, a cursor trail, hyperlinks, a preferences panel and live config reload."""
+assets = [
+    ["target/release/aeternus", "usr/bin/", "755"],
+    ["target/release/aet", "usr/bin/", "755"],
+    ["packaging/io.github.AeternalAngel.Aeternus.desktop", "usr/share/applications/", "644"],
+    ["packaging/io.github.AeternalAngel.Aeternus.metainfo.xml", "usr/share/metainfo/", "644"],
+    ["packaging/icons/hicolor/16x16/apps/io.github.AeternalAngel.Aeternus.png", "usr/share/icons/hicolor/16x16/apps/", "644"],
+    ["packaging/icons/hicolor/32x32/apps/io.github.AeternalAngel.Aeternus.png", "usr/share/icons/hicolor/32x32/apps/", "644"],
+    ["packaging/icons/hicolor/48x48/apps/io.github.AeternalAngel.Aeternus.png", "usr/share/icons/hicolor/48x48/apps/", "644"],
+    ["packaging/icons/hicolor/64x64/apps/io.github.AeternalAngel.Aeternus.png", "usr/share/icons/hicolor/64x64/apps/", "644"],
+    ["packaging/icons/hicolor/128x128/apps/io.github.AeternalAngel.Aeternus.png", "usr/share/icons/hicolor/128x128/apps/", "644"],
+    ["packaging/icons/hicolor/256x256/apps/io.github.AeternalAngel.Aeternus.png", "usr/share/icons/hicolor/256x256/apps/", "644"],
+    ["packaging/icons/hicolor/512x512/apps/io.github.AeternalAngel.Aeternus.png", "usr/share/icons/hicolor/512x512/apps/", "644"],
+    ["packaging/man/aeternus.1", "usr/share/man/man1/", "644"],
+    ["packaging/man/aet.1", "usr/share/man/man1/", "644"],
+    ["packaging/completions/aet.bash", "usr/share/bash-completion/completions/aet", "644"],
+    ["packaging/completions/aeternus.bash", "usr/share/bash-completion/completions/aeternus", "644"],
+    ["packaging/completions/_aet", "usr/share/zsh/vendor-completions/", "644"],
+    ["packaging/completions/_aeternus", "usr/share/zsh/vendor-completions/", "644"],
+    ["packaging/completions/aet.fish", "usr/share/fish/vendor_completions.d/", "644"],
+    ["packaging/completions/aeternus.fish", "usr/share/fish/vendor_completions.d/", "644"],
+    ["README.md", "usr/share/doc/aeternus/", "644"],
+    ["CHANGELOG.md", "usr/share/doc/aeternus/", "644"],
+]
+
+[package.metadata.generate-rpm]
+summary = "GPU-accelerated terminal emulator for Linux"
+license = "MIT"
+assets = [
+    { source = "target/release/aeternus", dest = "/usr/bin/aeternus", mode = "755" },
+    { source = "target/release/aet", dest = "/usr/bin/aet", mode = "755" },
+    { source = "packaging/io.github.AeternalAngel.Aeternus.desktop", dest = "/usr/share/applications/io.github.AeternalAngel.Aeternus.desktop", mode = "644" },
+    { source = "packaging/io.github.AeternalAngel.Aeternus.metainfo.xml", dest = "/usr/share/metainfo/io.github.AeternalAngel.Aeternus.metainfo.xml", mode = "644" },
+    { source = "packaging/icons/hicolor/16x16/apps/io.github.AeternalAngel.Aeternus.png", dest = "/usr/share/icons/hicolor/16x16/apps/io.github.AeternalAngel.Aeternus.png", mode = "644" },
+    { source = "packaging/icons/hicolor/32x32/apps/io.github.AeternalAngel.Aeternus.png", dest = "/usr/share/icons/hicolor/32x32/apps/io.github.AeternalAngel.Aeternus.png", mode = "644" },
+    { source = "packaging/icons/hicolor/48x48/apps/io.github.AeternalAngel.Aeternus.png", dest = "/usr/share/icons/hicolor/48x48/apps/io.github.AeternalAngel.Aeternus.png", mode = "644" },
+    { source = "packaging/icons/hicolor/64x64/apps/io.github.AeternalAngel.Aeternus.png", dest = "/usr/share/icons/hicolor/64x64/apps/io.github.AeternalAngel.Aeternus.png", mode = "644" },
+    { source = "packaging/icons/hicolor/128x128/apps/io.github.AeternalAngel.Aeternus.png", dest = "/usr/share/icons/hicolor/128x128/apps/io.github.AeternalAngel.Aeternus.png", mode = "644" },
+    { source = "packaging/icons/hicolor/256x256/apps/io.github.AeternalAngel.Aeternus.png", dest = "/usr/share/icons/hicolor/256x256/apps/io.github.AeternalAngel.Aeternus.png", mode = "644" },
+    { source = "packaging/icons/hicolor/512x512/apps/io.github.AeternalAngel.Aeternus.png", dest = "/usr/share/icons/hicolor/512x512/apps/io.github.AeternalAngel.Aeternus.png", mode = "644" },
+    { source = "packaging/man/aeternus.1", dest = "/usr/share/man/man1/aeternus.1", mode = "644", doc = true },
+    { source = "packaging/man/aet.1", dest = "/usr/share/man/man1/aet.1", mode = "644", doc = true },
+    { source = "packaging/completions/aet.bash", dest = "/usr/share/bash-completion/completions/aet", mode = "644" },
+    { source = "packaging/completions/aeternus.bash", dest = "/usr/share/bash-completion/completions/aeternus", mode = "644" },
+    { source = "packaging/completions/_aet", dest = "/usr/share/zsh/site-functions/_aet", mode = "644" },
+    { source = "packaging/completions/_aeternus", dest = "/usr/share/zsh/site-functions/_aeternus", mode = "644" },
+    { source = "packaging/completions/aet.fish", dest = "/usr/share/fish/vendor_completions.d/aet.fish", mode = "644" },
+    { source = "packaging/completions/aeternus.fish", dest = "/usr/share/fish/vendor_completions.d/aeternus.fish", mode = "644" },
+    { source = "README.md", dest = "/usr/share/doc/aeternus/README.md", mode = "644", doc = true },
+]
+
+[package.metadata.generate-rpm.requires]
+libxkbcommon = "*"

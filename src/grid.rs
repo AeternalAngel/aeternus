@@ -9,9 +9,15 @@ impl Grid {
     pub fn new(cols: usize, rows: usize) -> Self {
         Self { cells: vec![Cell::BLANK; cols * rows], cols, rows, top: 0 }
     }
-    pub fn cols(&self) -> usize { self.cols }
-    pub fn rows(&self) -> usize { self.rows }
-    fn phys(&self, row: usize) -> usize { (self.top + row) % self.rows }
+    pub fn cols(&self) -> usize {
+        self.cols
+    }
+    pub fn rows(&self) -> usize {
+        self.rows
+    }
+    fn phys(&self, row: usize) -> usize {
+        (self.top + row) % self.rows
+    }
     pub fn row(&self, r: usize) -> &[Cell] {
         let s = self.phys(r) * self.cols;
         &self.cells[s..s + self.cols]
@@ -30,7 +36,9 @@ impl Grid {
     }
     pub fn scroll_up(&mut self, top: usize, bottom: usize, n: usize, blank: Cell) {
         let n = n.min(bottom - top + 1);
-        if n == 0 { return; }
+        if n == 0 {
+            return;
+        }
         if top == 0 && bottom == self.rows - 1 {
             for i in 0..n {
                 let s = self.phys(i) * self.cols;
@@ -48,7 +56,9 @@ impl Grid {
     }
     pub fn scroll_down(&mut self, top: usize, bottom: usize, n: usize, blank: Cell) {
         let n = n.min(bottom - top + 1);
-        if n == 0 { return; }
+        if n == 0 {
+            return;
+        }
         for r in (top..(bottom + 1 - n)).rev() {
             self.copy_row(r, r + n);
         }

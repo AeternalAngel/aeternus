@@ -35,6 +35,11 @@ pub struct Parser {
     utf8_len: usize,
     utf8_need: usize,
 }
+impl Default for Parser {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 impl Parser {
     pub fn new() -> Self {
         Self {

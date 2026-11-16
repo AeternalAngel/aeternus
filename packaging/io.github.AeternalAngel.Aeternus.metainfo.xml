@@ -1,0 +1,66 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>io.github.AeternalAngel.Aeternus</id>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>MIT</project_license>
+  <name>Aeternus</name>
+  <summary>GPU-accelerated terminal emulator</summary>
+  <developer id="io.github.aeternalangel">
+    <name>Gabriel (AeternalAngel)</name>
+  </developer>
+  <description>
+    <p>
+      Aeternus is a fast terminal emulator for Linux, rendered on the GPU with wgpu.
+      It runs natively on Wayland and X11.
+    </p>
+    <ul>
+      <li>Tabs, an optional menu bar and a built-in preferences panel with a color picker</li>
+      <li>Truecolor, wide characters, color emoji and combining marks</li>
+      <li>Clickable URLs and OSC 8 hyperlinks</li>
+      <li>A configurable cursor trail animation and background transparency</li>
+      <li>Live configuration reload and fully configurable keybindings</li>
+      <li>The aet companion command to control the running instance from the shell</li>
+    </ul>
+  </description>
+  <launchable type="desktop-id">io.github.AeternalAngel.Aeternus.desktop</launchable>
+  <url type="homepage">https://github.com/AeternalAngel/aeternus</url>
+  <url type="bugtracker">https://github.com/AeternalAngel/aeternus/issues</url>
+  <url type="vcs-browser">https://github.com/AeternalAngel/aeternus</url>
+  <screenshots>
+    <screenshot type="default">
+      <caption>Aeternus running a shell</caption>
+      <image>https://raw.githubusercontent.com/AeternalAngel/aeternus/main/docs/terminal.png</image>
+    </screenshot>
+  </screenshots>
+  <categories>
+    <category>System</category>
+    <category>TerminalEmulator</category>
+  </categories>
+  <keywords>
+    <keyword>terminal</keyword>
+    <keyword>shell</keyword>
+    <keyword>console</keyword>
+    <keyword>command line</keyword>
+  </keywords>
+  <provides>
+    <binary>aeternus</binary>
+    <binary>aet</binary>
+  </provides>
+  <requires>
+    <display_length compare="ge">360</display_length>
+  </requires>
+  <supports>
+    <control>keyboard</control>
+    <control>pointing</control>
+  </supports>
+  <content_rating type="oars-1.1" />
+  <releases>
+    <release version="1.4.0" date="2026-11-15">
+      <description>
+        <p>Tabs, menu bar, preferences panel, cursor trail, hyperlinks and many compatibility fixes.</p>
+      </description>
+    </release>
+    <release version="1.3.0" date="2026-11-12" />
+    <release version="1.2.1" date="2026-11-10" />
+  </releases>
+</component>

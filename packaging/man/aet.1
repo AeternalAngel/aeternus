@@ -1,0 +1,33 @@
+.TH AET 1 "2026-11-15" "aeternus 1.4" "User Commands"
+.SH NAME
+aet \- control a running Aeternus instance
+.SH SYNOPSIS
+.B aet
+.I command
+.SH DESCRIPTION
+.B aet
+talks to the most recently focused
+.BR aeternus (1)
+window on the current display through a Unix socket in
+.IR $XDG_RUNTIME_DIR .
+.SH COMMANDS
+.TP
+.B version
+Print the Aeternus version into the active terminal.
+.TP
+.B pref
+Open the Preferences panel.
+.TP
+.B reload
+Reload config.toml.
+.SH OPTIONS
+.TP
+.BR \-h ", " \-\-help
+Print a short help and exit.
+.TP
+.BR \-V ", " \-\-version
+Print the aet version and exit.
+.SH EXIT STATUS
+0 on success, 1 when no instance answered or the command failed, 2 on usage errors.
+.SH SEE ALSO
+.BR aeternus (1)
