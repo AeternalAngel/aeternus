@@ -8,7 +8,7 @@ use std::time::{Duration, Instant};
 
 use bytemuck::{Pod, Zeroable};
 use cosmic_text::{
-    Attrs, Buffer, Family, FontSystem, Metrics, Shaping, Style, SwashCache, SwashContent, Weight,
+    Attrs, Buffer, Family, FontSystem, Hinting, Metrics, Shaping, Style, SwashCache, SwashContent, Weight,
 };
 use wgpu::util::DeviceExt;
 use winit::window::Window;
@@ -43,10 +43,12 @@ struct Instance {
     uv_size: [f32; 2],
     color: [f32; 4],
     color_glyph: f32,
+    under: [f32; 3],
 }
 impl Instance {
-    const ATTRS: [wgpu::VertexAttribute; 6] = wgpu::vertex_attr_array![
-        0 => Float32x2, 1 => Float32x2, 2 => Float32x2, 3 => Float32x2, 4 => Float32x4, 5 => Float32
+    const ATTRS: [wgpu::VertexAttribute; 7] = wgpu::vertex_attr_array![
+        0 => Float32x2, 1 => Float32x2, 2 => Float32x2, 3 => Float32x2, 4 => Float32x4, 5 => Float32,
+        6 => Float32x3
     ];
     fn layout() -> wgpu::VertexBufferLayout<'static> {
         wgpu::VertexBufferLayout {
@@ -61,7 +63,15 @@ impl Instance {
     fn rect_alpha(x: f32, y: f32, w: f32, h: f32, rgb: [u8; 3], a: f32) -> Self {
         let mut color = color4(rgb);
         color[3] = a;
-        Self { pos: [x, y], size: [w, h], uv_pos: WHITE_UV, uv_size: [0.0, 0.0], color, color_glyph: 0.0 }
+        Self {
+            pos: [x, y],
+            size: [w, h],
+            uv_pos: WHITE_UV,
+            uv_size: [0.0, 0.0],
+            color,
+            color_glyph: 0.0,
+            under: [0.0; 3],
+        }
     }
 }
 #[repr(C)]
@@ -82,6 +92,9 @@ impl PolyVertex {
 }
 fn color4(c: [u8; 3]) -> [f32; 4] {
     [c[0] as f32 / 255.0, c[1] as f32 / 255.0, c[2] as f32 / 255.0, 1.0]
+}
+fn color3(c: [u8; 3]) -> [f32; 3] {
+    [c[0] as f32 / 255.0, c[1] as f32 / 255.0, c[2] as f32 / 255.0]
 }
 fn mix(a: [u8; 3], b: [u8; 3], t: f32) -> [u8; 3] {
     let f = |x: u8, y: u8| (x as f32 + (y as f32 - x as f32) * t).round() as u8;
@@ -669,7 +682,9 @@ impl Renderer {
         }
     }
     fn push_text(&mut self, fgs: &mut Vec<Instance>, text: &str, x: f32, y: f32, color: [u8; 3]) {
+        let (x, y) = (x.round(), y.round());
         let cw = self.cell_w;
+        let under = color3(self.effective_bg);
         for (i, c) in text.chars().enumerate() {
             if let Some(g) = self.glyph(c, false, false) {
                 fgs.push(Instance {
@@ -679,6 +694,7 @@ impl Renderer {
                     uv_size: g.uv_size,
                     color: color4(color),
                     color_glyph: 0.0,
+                    under,
                 });
             }
         }
@@ -841,6 +857,7 @@ impl Renderer {
             .weight(if bold { Weight::BOLD } else { Weight::NORMAL })
             .style(if italic { Style::Italic } else { Style::Normal });
         let mut buf = Buffer::new(&mut self.font_system, Metrics::new(size, self.cell_h));
+        buf.set_hinting(Hinting::Enabled);
         buf.set_text(text, &attrs, Shaping::Advanced, None);
         buf.shape_until_scroll(&mut self.font_system, false);
         let mut phys = Vec::new();
@@ -1007,6 +1024,7 @@ impl Renderer {
                             uv_size: g.uv_size,
                             color: color4(fg),
                             color_glyph: if g.is_color { 1.0 } else { 0.0 },
+                            under: color3(bg),
                         });
                     }
                 }

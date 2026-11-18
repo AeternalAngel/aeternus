@@ -29,6 +29,7 @@ struct VsIn {
     @location(3) uv_size: vec2<f32>,
     @location(4) color: vec4<f32>,
     @location(5) color_glyph: f32,
+    @location(6) under: vec3<f32>,
 };
 
 struct VsOut {
@@ -36,7 +37,10 @@ struct VsOut {
     @location(0) uv: vec2<f32>,
     @location(1) color: vec4<f32>,
     @location(2) color_glyph: f32,
+    @location(3) under: vec3<f32>,
 };
+
+const LUMA: vec3<f32> = vec3<f32>(0.2126, 0.7152, 0.0722);
 
 @vertex
 fn vs_main(inp: VsIn) -> VsOut {
@@ -48,6 +52,7 @@ fn vs_main(inp: VsIn) -> VsOut {
     o.uv = inp.uv_pos + corner * inp.uv_size;
     o.color = out_color(inp.color);
     o.color_glyph = inp.color_glyph;
+    o.under = out_color(vec4<f32>(inp.under, 1.0)).rgb;
     return o;
 }
 
@@ -59,15 +64,9 @@ fn fs_main(inp: VsOut) -> @location(0) vec4<f32> {
         return vec4<f32>(rgb, tex.a * inp.color.a);
     }
     var a = tex.r;
-    if g.text.y > 0.0 {
-        a = min(1.0, a * (1.0 + g.text.y));
-    }
-    if g.text.x != 1.0 {
-        let lum = dot(inp.color.rgb, vec3<f32>(0.2126, 0.7152, 0.0722));
-        let dark = select(0.5, 0.214, g.mode.x > 0.5);
-        if lum < dark {
-            a = pow(a, 1.0 / g.text.x);
-        }
+    if g.text.x != 1.0 || g.text.y > 0.0 {
+        let w = clamp((1.0 - dot(inp.color.rgb, LUMA) + dot(inp.under, LUMA)) * 0.5, 0.0, 1.0);
+        a = clamp(mix(a, pow(a, 1.0 / g.text.x), w) * (1.0 + g.text.y), 0.0, 1.0);
     }
     return vec4<f32>(inp.color.rgb, inp.color.a * a);
 }
