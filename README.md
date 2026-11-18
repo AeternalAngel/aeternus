@@ -10,8 +10,6 @@
   <a href="LICENSE"><img src="https://img.shields.io/github/license/AeternalAngel/aeternus" alt="MIT License"></a>
 </div>
 
-🇧🇷 [Leia em português](README.pt-BR.md)
-
 <div align="center">
   <img src="docs/terminal.png" alt="Aeternus screenshot" width="800">
 </div>
@@ -26,8 +24,8 @@
 - **Links:** `Ctrl+click` opens URLs and OSC 8 hyperlinks.
 - **Compatibility:** alternate screen, bracketed paste, mouse reporting (1000/1002/1003/SGR), focus events, synchronized output (2026), kitty keyboard protocol (disambiguate level), cursor shapes, OSC 4/7/8/10/11/12/52, tab stops, insert/origin modes and more.
 - **Daily use:** 10k-line scrollback with reflow on resize, word/line selection, clipboard and primary selection, zoom, fullscreen, visual bell.
-- **Colors in kitty's format:** the same names as kitty (`foreground`, `selection_background`, `color0`…`color255`) and kitty `.conf` themes load directly.
-- **Text rendering** with gamma-correct blending like kitty, tunable with `text_composition_strategy`.
+- **Colors in kitty's format:** the same names as kitty (`foreground`, `selection_background`, `color0`…`color255`), kitty's default 16-color palette, and kitty `.conf` themes load directly.
+- **Text rendering** with gamma-correct blending like kitty, tunable with `text_composition_strategy` using the same gamma and contrast curve as kitty.
 - **Config:** a commented `config.toml`, reloaded automatically when it changes, with every shortcut configurable.
 - **`aet` command** to control the running window from the shell.
 
@@ -61,8 +59,8 @@ chmod +x aeternus-*.AppImage
 ### Any distribution (tarball)
 
 ```bash
-tar xzf aeternus-1.4-linux-x86_64.tar.gz
-cd aeternus-1.4-linux-x86_64
+tar xzf aeternus-1.4.1-linux-x86_64.tar.gz
+cd aeternus-1.4.1-linux-x86_64
 ./install.sh                    # installs to ~/.local (binaries, menu entry, icons, man pages, completions)
 sudo ./install.sh --prefix /usr/local   # system-wide
 ./install.sh --uninstall        # remove it again

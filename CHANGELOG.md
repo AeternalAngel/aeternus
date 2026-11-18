@@ -6,6 +6,18 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+## [1.4.1] - 2026-11-17
+
+### Changed
+
+- The default ANSI palette (`color0` to `color15`) is now kitty's default palette, both built in and in the configuration template. Configurations that set these colors keep them.
+- Glyph advances inside multi-glyph clusters (combining marks, emoji sequences) are snapped to whole pixels.
+
+### Fixed
+
+- The gamma value of `font.text_composition_strategy` had no effect on light text on dark backgrounds. It now follows kitty's curve: the adjustment is weighted by the luminance difference between the text and the cell background, so `"1.7 30"` looks the same as in kitty. The default `"platform"` is unchanged.
+- Text in the tab strip, menus and Preferences was placed at fractional pixel positions; it is now aligned to whole pixels.
+
 ## [1.4] - 2026-11-15
 
 ### Added
@@ -138,7 +150,8 @@ All notable changes to this project are documented here. The format is based on
 
 Initial Windows support.
 
-[Unreleased]: https://github.com/AeternalAngel/aeternus/compare/v1.4.0-pre1...HEAD
+[Unreleased]: https://github.com/AeternalAngel/aeternus/compare/v1.4.1...HEAD
+[1.4.1]: https://github.com/AeternalAngel/aeternus/compare/v1.4.0...v1.4.1
 [1.4]: https://github.com/AeternalAngel/aeternus/compare/v1.3.0...v1.4.0-pre1
 [1.3]: https://github.com/AeternalAngel/aeternus/compare/v1.2.1...v1.3.0
 [1.2.1]: https://github.com/AeternalAngel/aeternus/compare/v1.2.0...v1.2.1
