@@ -54,22 +54,22 @@ pub const TEMPLATE: &str = r##"# Aeternus configuration
 # selection_foreground = ""   # empty = keep the text color
 # cursor = ""                 # empty = same as the foreground
 # cursor_text_color = ""      # empty = the background color
-# color0 = "#45475a"    # black
-# color1 = "#f38ba8"    # red
-# color2 = "#a6e3a1"    # green
-# color3 = "#f9e2af"    # yellow
-# color4 = "#89b4fa"    # blue
-# color5 = "#f5c2e7"    # magenta
-# color6 = "#94e2d5"    # cyan
-# color7 = "#bac2de"    # white
-# color8 = "#585b70"    # bright black
-# color9 = "#f38ba8"    # bright red
-# color10 = "#a6e3a1"   # bright green
-# color11 = "#f9e2af"   # bright yellow
-# color12 = "#89b4fa"   # bright blue
-# color13 = "#f5c2e7"   # bright magenta
-# color14 = "#94e2d5"   # bright cyan
-# color15 = "#cdd6f4"   # bright white
+# color0 = "#000000"    # black
+# color1 = "#cc0403"    # red
+# color2 = "#19cb00"    # green
+# color3 = "#cecb00"    # yellow
+# color4 = "#0d73cc"    # blue
+# color5 = "#cb1ed1"    # magenta
+# color6 = "#0dcdcd"    # cyan
+# color7 = "#dddddd"    # white
+# color8 = "#767676"    # bright black
+# color9 = "#f2201f"    # bright red
+# color10 = "#23fd00"   # bright green
+# color11 = "#fffd00"   # bright yellow
+# color12 = "#1a8fff"   # bright blue
+# color13 = "#fd28ff"   # bright magenta
+# color14 = "#14ffff"   # bright cyan
+# color15 = "#ffffff"   # bright white
 # color16 to color255 are accepted too.
 
 [keybindings]
