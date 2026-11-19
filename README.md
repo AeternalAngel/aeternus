@@ -6,7 +6,6 @@
 
   <a href="https://github.com/AeternalAngel/aeternus/actions/workflows/ci.yml"><img src="https://github.com/AeternalAngel/aeternus/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
   <a href="https://github.com/AeternalAngel/aeternus/releases"><img src="https://img.shields.io/github/v/release/AeternalAngel/aeternus?include_prereleases&sort=semver" alt="Release"></a>
-  <a href="https://aur.archlinux.org/packages/aeternus"><img src="https://img.shields.io/aur/version/aeternus" alt="AUR"></a>
   <a href="LICENSE"><img src="https://img.shields.io/github/license/AeternalAngel/aeternus" alt="MIT License"></a>
 </div>
 
@@ -33,38 +32,63 @@
 
 Requires a Vulkan (or OpenGL ES 3) capable GPU driver and Wayland or X11. Release binaries need glibc 2.36 or newer (Debian 12, Ubuntu 23.04, Fedora 37 or later); on older systems, build from source.
 
-### Arch Linux (AUR)
+Every [release](https://github.com/AeternalAngel/aeternus/releases) ships prebuilt packages for **x86_64** and **aarch64**:
+
+| Format | x86_64 | aarch64 |
+| --- | --- | --- |
+| `.deb` (Debian, Ubuntu) | `amd64` | `arm64` |
+| `.rpm` (Fedora, openSUSE) | `x86_64` | `aarch64` |
+| AppImage | `x86_64` | `aarch64` |
+| Tarball (any distribution) | `x86_64` | `aarch64` |
+
+Pick the file that matches your architecture (`uname -m` tells you).
+
+### Verify the download
+
+Each release includes a `SHA256SUMS` file. Download it next to your package and run:
 
 ```bash
-yay -S aeternus      # builds from source
-yay -S aeternus-bin  # prebuilt binary
+sha256sum -c SHA256SUMS --ignore-missing
 ```
 
-### Debian / Ubuntu, Fedora / openSUSE
-
-Download the `.deb` or `.rpm` from [Releases](https://github.com/AeternalAngel/aeternus/releases):
+### Debian / Ubuntu
 
 ```bash
-sudo apt install ./aeternus_*.deb
-sudo dnf install ./aeternus-*.rpm
+sudo apt install ./aeternus_*_amd64.deb   # or _arm64.deb
+```
+
+### Fedora
+
+```bash
+sudo dnf install ./aeternus-*.x86_64.rpm  # or .aarch64.rpm
+```
+
+### openSUSE
+
+```bash
+sudo zypper install ./aeternus-*.x86_64.rpm  # or .aarch64.rpm
 ```
 
 ### AppImage
 
 ```bash
-chmod +x aeternus-*.AppImage
-./aeternus-*.AppImage
+chmod +x aeternus-*-x86_64.AppImage   # or -aarch64
+./aeternus-*-x86_64.AppImage
 ```
 
 ### Any distribution (tarball)
 
 ```bash
-tar xzf aeternus-1.4.1-linux-x86_64.tar.gz
-cd aeternus-1.4.1-linux-x86_64
+tar xzf aeternus-*-linux-x86_64.tar.gz   # or linux-aarch64
+cd aeternus-*-linux-x86_64
 ./install.sh                    # installs to ~/.local (binaries, menu entry, icons, man pages, completions)
 sudo ./install.sh --prefix /usr/local   # system-wide
 ./install.sh --uninstall        # remove it again
 ```
+
+### Arch Linux
+
+An AUR package is planned. Until then, use the tarball above or build from source.
 
 ### From source
 
