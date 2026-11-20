@@ -6,6 +6,13 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+## [1.4.2] - 2026-11-20
+
+### Fixed
+
+- Powerline separators (U+E0B0 to U+E0BF) no longer leave stray pixels above or below prompt segments in themes like oh-my-posh or starship. They are now drawn by the terminal to fill the cell exactly, instead of using the font's glyph, whose height did not match the cell.
+- A dead key followed by space (`´`, `~`, `^`, `` ` ``) now inserts the accent itself, as in kitty. Space previously always sent a plain space, dropping the accent.
+
 ## [1.4.1] - 2026-11-17
 
 ### Changed
@@ -150,7 +157,8 @@ All notable changes to this project are documented here. The format is based on
 
 Initial Windows support.
 
-[Unreleased]: https://github.com/AeternalAngel/aeternus/compare/v1.4.1...HEAD
+[Unreleased]: https://github.com/AeternalAngel/aeternus/compare/v1.4.2...HEAD
+[1.4.2]: https://github.com/AeternalAngel/aeternus/compare/v1.4.1...v1.4.2
 [1.4.1]: https://github.com/AeternalAngel/aeternus/compare/v1.4.0...v1.4.1
 [1.4]: https://github.com/AeternalAngel/aeternus/compare/v1.3.0...v1.4.0-pre1
 [1.3]: https://github.com/AeternalAngel/aeternus/compare/v1.2.1...v1.3.0
