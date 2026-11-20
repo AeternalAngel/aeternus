@@ -1,4 +1,5 @@
 mod settings;
+mod sprite;
 pub mod trail;
 mod ui;
 
@@ -820,7 +821,37 @@ impl Renderer {
         self.ascii.fill(None);
         self.atlas_reset = true;
     }
+    fn sprite(&mut self, ch: char) -> Option<GlyphInfo> {
+        let key = (ch, false, false, 0);
+        if let Some(g) = self.fitted.get(&key) {
+            return *g;
+        }
+        let (w, h) = (self.cell_w as u32, self.cell_h as u32);
+        let thick = self.scale.round().max(1.0);
+        let mask = sprite::render(ch, w, h, thick)?;
+        let pos = match self.atlas.alloc(w, h) {
+            Some(pos) => pos,
+            None => {
+                self.reset_atlas();
+                self.atlas.alloc(w, h)?
+            }
+        };
+        self.atlas.write(&self.queue, pos.0, pos.1, w, h, &mask);
+        let a = ATLAS_SIZE as f32;
+        let g = Some(GlyphInfo {
+            uv_pos: [pos.0 as f32 / a, pos.1 as f32 / a],
+            uv_size: [w as f32 / a, h as f32 / a],
+            off: [0.0, 0.0],
+            size: [w as f32, h as f32],
+            is_color: false,
+        });
+        self.fitted.insert(key, g);
+        g
+    }
     fn glyph_in_cells(&mut self, ch: char, bold: bool, italic: bool, cells: u8) -> Option<GlyphInfo> {
+        if sprite::is_sprite(ch) {
+            return self.sprite(ch);
+        }
         let natural = self.glyph(ch, bold, italic)?;
         if (ch as u32) < 128 || is_powerline(ch) {
             return Some(natural);
