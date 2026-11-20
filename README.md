@@ -177,6 +177,15 @@ Splits, inline images (sixel / kitty graphics), IME composition (pre-edit) for C
 
 See [CONTRIBUTING.md](CONTRIBUTING.md). Bugs and ideas go to [Issues](https://github.com/AeternalAngel/aeternus/issues); security problems to [SECURITY.md](SECURITY.md).
 
+## Special Thanks <3
+
+### Contributors
+* **[henryiwakura](https://github.com/henryiwakura)** - Helped with many aspects of the project and added features I wouldn't have even known how to build.
+
+### Inspiration & Support
+* **[SertralinaS2](https://github.com/SertralinaS2)** - Kept me motivated to push through and not give up on the project.
+* **[Kitty](https://github.com/kovidgoyal/kitty)** - The terminal I used for so long that inspired me to build my own.
+
 ## License
 
 [MIT](LICENSE) © 2026 Gabriel (AeternalAngel)
