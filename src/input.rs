@@ -257,7 +257,7 @@ pub fn key_bytes(k: &KeyInput, mods: ModifiersState, modes: KeyModes) -> Option<
                 if mods.control_key() {
                     vec![0x00]
                 } else {
-                    b" ".to_vec()
+                    k.text.as_deref().filter(|t| !t.is_empty()).unwrap_or(" ").as_bytes().to_vec()
                 }
             }
             _ => k.text.as_ref()?.as_bytes().to_vec(),
@@ -322,6 +322,17 @@ mod tests {
     #[test]
     fn plain_text() {
         assert_eq!(key_bytes(&ch("a"), mods(false, false, false), legacy()), Some(b"a".to_vec()));
+    }
+
+    #[test]
+    fn dead_key_then_space_sends_composed_text() {
+        let mut k = named(NamedKey::Space);
+        k.text = Some("´".to_string());
+        assert_eq!(key_bytes(&k, mods(false, false, false), legacy()), Some("´".as_bytes().to_vec()));
+        k.text = Some("~".to_string());
+        assert_eq!(key_bytes(&k, mods(false, false, false), legacy()), Some(b"~".to_vec()));
+        k.text = None;
+        assert_eq!(key_bytes(&k, mods(false, false, false), legacy()), Some(b" ".to_vec()));
     }
 
     #[test]
