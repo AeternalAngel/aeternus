@@ -13,3 +13,4 @@ pub mod pty;
 pub mod render;
 pub mod search;
 pub mod term;
+pub mod terminfo;

@@ -30,6 +30,7 @@ pub const TEMPLATE: &str = r##"# Aeternus configuration
 # working_directory = ""  # empty = current directory
 # osc52 = true          # let programs write to the clipboard through OSC 52
 # smart_copy_paste = false  # Ctrl+C copies when there is a selection, Ctrl+V pastes
+# term = ""             # TERM for the shell; empty = xterm-aeternus when installed, else xterm-256color
 
 [cursor]
 # shape = "block"       # block, underline or bar
@@ -166,6 +167,7 @@ pub struct TerminalConfig {
     pub working_directory: String,
     pub osc52: bool,
     pub smart_copy_paste: bool,
+    pub term: String,
 }
 impl Default for TerminalConfig {
     fn default() -> Self {
@@ -175,6 +177,7 @@ impl Default for TerminalConfig {
             working_directory: String::new(),
             osc52: true,
             smart_copy_paste: false,
+            term: String::new(),
         }
     }
 }

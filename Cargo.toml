@@ -72,6 +72,7 @@ assets = [
     ["packaging/completions/_aeternus", "usr/share/zsh/vendor-completions/", "644"],
     ["packaging/completions/aet.fish", "usr/share/fish/vendor_completions.d/", "644"],
     ["packaging/completions/aeternus.fish", "usr/share/fish/vendor_completions.d/", "644"],
+    ["packaging/terminfo/x/xterm-aeternus", "usr/share/terminfo/x/", "644"],
     ["README.md", "usr/share/doc/aeternus/", "644"],
     ["CHANGELOG.md", "usr/share/doc/aeternus/", "644"],
 ]
@@ -99,6 +100,7 @@ assets = [
     { source = "packaging/completions/_aeternus", dest = "/usr/share/zsh/site-functions/_aeternus", mode = "644" },
     { source = "packaging/completions/aet.fish", dest = "/usr/share/fish/vendor_completions.d/aet.fish", mode = "644" },
     { source = "packaging/completions/aeternus.fish", dest = "/usr/share/fish/vendor_completions.d/aeternus.fish", mode = "644" },
+    { source = "packaging/terminfo/x/xterm-aeternus", dest = "/usr/share/terminfo/x/xterm-aeternus", mode = "644" },
     { source = "README.md", dest = "/usr/share/doc/aeternus/README.md", mode = "644", doc = true },
 ]
 

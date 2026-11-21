@@ -150,6 +150,18 @@ Use `aeternus --config <path>` to load a different file. Errors and warnings are
 | Preferences | (none) | `preferences` |
 | Open link | `Ctrl+click` (`Ctrl+Shift+click` in mouse-aware apps) | |
 
+## Terminfo
+
+Aeternus ships an `xterm-aeternus` terminfo entry, based on `xterm-256color`, that also declares styled and colored underlines (`Smulx`, `Setulc`), synchronized output (`Sync`) and truecolor (`Tc`), so programs like tmux and Neovim can use them. The packages and `install.sh` install it, and the shell gets `TERM=xterm-aeternus` whenever the entry is found; otherwise it falls back to `TERM=xterm-256color`. Set `term` in `[terminal]` to force a value.
+
+Hosts you reach over SSH don't have the entry. Copy it once with:
+
+```bash
+infocmp -x xterm-aeternus | ssh host -- tic -x -
+```
+
+or keep `xterm-256color` for SSH with `SetEnv TERM=xterm-256color` in `~/.ssh/config`. With a user install (`~/.local`), the entry is found through `TERMINFO`, which `sudo` does not keep; install system-wide if programs run under `sudo` complain about an unknown terminal.
+
 ## The `aet` command
 
 `aet` talks to the most recently focused Aeternus window over a socket in `$XDG_RUNTIME_DIR`:

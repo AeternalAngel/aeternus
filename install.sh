@@ -10,7 +10,8 @@ usage() {
     cat <<EOF
 usage: ./install.sh [--prefix DIR] [--uninstall]
 
-Installs aeternus, aet, the desktop entry, icons, man pages and shell completions.
+Installs aeternus, aet, the desktop entry, icons, man pages, shell completions and the
+xterm-aeternus terminfo entry.
 From a source checkout it runs 'cargo build --release' first.
 
   --prefix DIR   install under DIR (default: \$HOME/.local; use /usr/local for a system install)
@@ -81,6 +82,7 @@ share/zsh/site-functions/_aeternus
 share/zsh/site-functions/_aet
 share/fish/vendor_completions.d/aeternus.fish
 share/fish/vendor_completions.d/aet.fish
+share/terminfo/x/xterm-aeternus
 "
 SIZES="16x16 32x32 48x48 64x64 128x128 256x256 512x512"
 
@@ -92,6 +94,18 @@ refresh() {
     if command -v gtk-update-icon-cache >/dev/null 2>&1; then
         gtk-update-icon-cache -q -t -f "$PREFIX/share/icons/hicolor" 2>/dev/null || :
     fi
+}
+
+install_terminfo() {
+    src="$PKG/terminfo/xterm-aeternus.terminfo"
+    if command -v tic >/dev/null 2>&1 && tic -x -o "$ROOT/share/terminfo" "$src" 2>/dev/null; then
+        return 0
+    fi
+    if [ -f "$PKG/terminfo/x/xterm-aeternus" ]; then
+        install -Dm644 "$PKG/terminfo/x/xterm-aeternus" "$ROOT/share/terminfo/x/xterm-aeternus"
+        return 0
+    fi
+    echo "note: tic not found, terminfo entry not installed; the shell will use TERM=xterm-256color"
 }
 
 remove_legacy() {
@@ -110,6 +124,7 @@ if [ "$ACTION" = uninstall ]; then
     for f in $FILES; do
         rm -f "$ROOT/$f"
     done
+    rmdir "$ROOT/share/terminfo/x" "$ROOT/share/terminfo" 2>/dev/null || :
     for s in $SIZES; do
         rm -f "$ROOT/share/icons/hicolor/$s/apps/$APP_ID.png"
     done
@@ -140,6 +155,7 @@ install -Dm644 "$PKG/completions/_aeternus" "$ROOT/share/zsh/site-functions/_aet
 install -Dm644 "$PKG/completions/_aet" "$ROOT/share/zsh/site-functions/_aet"
 install -Dm644 "$PKG/completions/aeternus.fish" "$ROOT/share/fish/vendor_completions.d/aeternus.fish"
 install -Dm644 "$PKG/completions/aet.fish" "$ROOT/share/fish/vendor_completions.d/aet.fish"
+install_terminfo
 remove_legacy
 refresh
 

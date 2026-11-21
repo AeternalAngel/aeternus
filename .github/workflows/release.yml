@@ -52,12 +52,16 @@ jobs:
         run: cargo test --locked --lib
       - name: Build
         run: cargo build --locked --release
+      - name: Terminfo
+        run: |
+          tic -x -o packaging/terminfo packaging/terminfo/xterm-aeternus.terminfo
+          test -f packaging/terminfo/x/xterm-aeternus
       - name: Tarball
         run: |
           N="aeternus-${{ steps.ver.outputs.short }}-linux-${{ matrix.arch }}"
           mkdir -p "dist/$N/packaging"
           cp target/release/aeternus target/release/aet install.sh LICENSE README.md CHANGELOG.md "dist/$N/"
-          cp -r packaging/icons packaging/man packaging/completions \
+          cp -r packaging/icons packaging/man packaging/completions packaging/terminfo \
             packaging/io.github.AeternalAngel.Aeternus.desktop \
             packaging/io.github.AeternalAngel.Aeternus.metainfo.xml "dist/$N/packaging/"
           tar czf "dist/$N.tar.gz" -C dist "$N"
@@ -80,6 +84,7 @@ jobs:
           cp packaging/io.github.AeternalAngel.Aeternus.metainfo.xml \
             $APPDIR/usr/share/metainfo/io.github.AeternalAngel.Aeternus.appdata.xml
           cp -r packaging/icons $APPDIR/usr/share/
+          install -Dm644 packaging/terminfo/x/xterm-aeternus $APPDIR/usr/share/terminfo/x/xterm-aeternus
           cp packaging/io.github.AeternalAngel.Aeternus.desktop $APPDIR/
           cp packaging/icons/hicolor/256x256/apps/io.github.AeternalAngel.Aeternus.png $APPDIR/
           ln -s usr/bin/aeternus $APPDIR/AppRun

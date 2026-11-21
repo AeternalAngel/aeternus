@@ -4,6 +4,8 @@ use std::sync::{Arc, Mutex};
 
 use portable_pty::{native_pty_system, Child, CommandBuilder, MasterPty, PtySize};
 
+use crate::terminfo::TermEnv;
+
 pub type Writer = Arc<Mutex<Box<dyn io::Write + Send>>>;
 
 pub struct Pty {
@@ -44,6 +46,7 @@ impl Pty {
         argv: &[String],
         cwd: Option<&Path>,
         size: Size,
+        term: &TermEnv,
     ) -> io::Result<(Self, Box<dyn io::Read + Send>)> {
         let pty = native_pty_system().openpty(size.pty()).map_err(io::Error::other)?;
         let (program, args) = argv.split_first().ok_or_else(|| io::Error::other("empty command"))?;
@@ -52,7 +55,10 @@ impl Pty {
         if let Some(dir) = cwd.filter(|d| d.is_dir()) {
             cmd.cwd(dir);
         }
-        cmd.env("TERM", "xterm-256color");
+        cmd.env("TERM", &term.term);
+        if let Some(dir) = &term.terminfo {
+            cmd.env("TERMINFO", dir);
+        }
         cmd.env("COLORTERM", "truecolor");
         cmd.env("TERM_PROGRAM", "aeternus");
         cmd.env("TERM_PROGRAM_VERSION", env!("CARGO_PKG_VERSION"));
@@ -89,7 +95,8 @@ mod tests {
     fn spawns_and_reads_output() {
         let argv = vec!["/bin/sh".to_string(), "-c".to_string(), "printf ok".to_string()];
         let size = Size { cols: 80, rows: 24, cell_w: 8, cell_h: 16 };
-        let (mut pty, mut reader) = Pty::spawn(&argv, None, size).unwrap();
+        let term = TermEnv { term: "dumb".into(), terminfo: None };
+        let (mut pty, mut reader) = Pty::spawn(&argv, None, size, &term).unwrap();
         let mut out = Vec::new();
         let mut buf = [0u8; 64];
         while let Ok(n) = reader.read(&mut buf) {

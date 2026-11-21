@@ -63,6 +63,10 @@ jobs:
       - run: desktop-file-validate packaging/io.github.AeternalAngel.Aeternus.desktop
       - run: appstreamcli validate --no-net packaging/io.github.AeternalAngel.Aeternus.metainfo.xml
       - run: shellcheck install.sh
+      - name: Terminfo
+        run: |
+          tic -x -o "$RUNNER_TEMP/terminfo" packaging/terminfo/xterm-aeternus.terminfo
+          TERMINFO="$RUNNER_TEMP/terminfo" infocmp -x xterm-aeternus | grep -q 'Smulx='
       - run: |
           for f in packaging/man/*.1; do groff -man -Tutf8 -ww "$f" > /dev/null; done
       - run: bash -n packaging/completions/aet.bash && bash -n packaging/completions/aeternus.bash

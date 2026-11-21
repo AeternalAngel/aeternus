@@ -27,6 +27,7 @@ use crate::pty::{self, Pty, Size};
 use crate::render::{Action, Renderer, SettingsOutcome, View};
 use crate::search::Search;
 use crate::term::{MouseMode, SelMode, Term};
+use crate::terminfo;
 
 pub const APP_ID: &str = "io.github.AeternalAngel.Aeternus";
 const BLINK_INTERVAL: Duration = Duration::from_millis(530);
@@ -367,7 +368,8 @@ impl State {
     fn create_tab(&mut self, cwd: Option<PathBuf>) -> Result<(), String> {
         let size = self.pty_size();
         let argv = resolve_shell(&self.cfg);
-        let (pty, reader) = Pty::spawn(&argv, cwd.as_deref(), size)
+        let term_env = terminfo::term_env(&self.cfg.terminal.term);
+        let (pty, reader) = Pty::spawn(&argv, cwd.as_deref(), size, &term_env)
             .map_err(|e| format!("could not start {:?}: {e}", argv[0]))?;
         let mut t = Term::new(size.cols as usize, size.rows as usize);
         t.apply_config(&self.cfg);

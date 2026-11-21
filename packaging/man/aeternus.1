@@ -81,8 +81,17 @@ Log file with errors and warnings.
 Control sockets used by
 .BR aet (1).
 .SH ENVIRONMENT
-The shell is started with \fBTERM=xterm-256color\fR, \fBCOLORTERM=truecolor\fR,
-\fBTERM_PROGRAM=aeternus\fR and \fBTERM_PROGRAM_VERSION\fR set.
+The shell is started with \fBCOLORTERM=truecolor\fR, \fBTERM_PROGRAM=aeternus\fR and
+\fBTERM_PROGRAM_VERSION\fR set. \fBTERM\fR is \fBxterm-aeternus\fR when that terminfo entry is
+installed (it declares styled and colored underlines, synchronized output and truecolor), and
+\fBxterm-256color\fR otherwise; \fBterm\fR in \fB[terminal]\fR overrides it. When the entry is
+only found next to the binary (\fI<prefix>/share/terminfo\fR), \fBTERMINFO\fR points there.
+Remote hosts reached over ssh need the entry too:
+.RS
+.EX
+infocmp \-x xterm\-aeternus | ssh host \-\- tic \-x \-
+.EE
+.RE
 .SH SEE ALSO
 .BR aet (1)
 .SH BUGS
