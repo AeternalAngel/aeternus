@@ -19,7 +19,7 @@
 - **Tabs**, an optional **menu bar** and a **Preferences** panel with a built-in color picker.
 - **Cursor trail** animation inspired by kitty.
 - **Background transparency** (`window.opacity`), with solid text.
-- **Text:** truecolor, 256 colors, bold/italic/underline/strikethrough, wide (CJK) characters, color emoji, combining accents, skin-tone modifiers and ZWJ emoji sequences, DEC line drawing.
+- **Text:** truecolor, 256 colors, bold/italic/strikethrough/blink, underline styles (double, curly, dotted, dashed) and colors, wide (CJK) characters, color emoji, combining accents, skin-tone modifiers and ZWJ emoji sequences, DEC line drawing.
 - **Links:** `Ctrl+click` opens URLs and OSC 8 hyperlinks.
 - **Compatibility:** alternate screen, bracketed paste, mouse reporting (1000/1002/1003/SGR), focus events, synchronized output (2026), kitty keyboard protocol (disambiguate level), cursor shapes, OSC 4/7/8/10/11/12/52, tab stops, insert/origin modes and more.
 - **Daily use:** 10k-line scrollback with reflow on resize and search, word/line selection, clipboard and primary selection, zoom, fullscreen, visual bell.

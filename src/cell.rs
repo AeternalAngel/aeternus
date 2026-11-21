@@ -13,6 +13,11 @@ pub mod flags {
     pub const INVERSE: u16 = 1 << 5;
     pub const HIDDEN: u16 = 1 << 6;
     pub const STRIKE: u16 = 1 << 7;
+    pub const UNDERLINE_STYLE: u16 = 0b111 << 10;
+    pub const UNDERLINE_DOUBLE: u16 = 1 << 10;
+    pub const UNDERLINE_CURLY: u16 = 2 << 10;
+    pub const UNDERLINE_DOTTED: u16 = 3 << 10;
+    pub const UNDERLINE_DASHED: u16 = 4 << 10;
 }
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct Cell {

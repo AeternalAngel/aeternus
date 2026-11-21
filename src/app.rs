@@ -234,6 +234,8 @@ struct State {
     focused: bool,
     blink_on: bool,
     last_blink: Instant,
+    text_blink_on: bool,
+    last_text_blink: Instant,
     mouse_pos: (f64, f64),
     mouse_cell: (usize, usize),
     selecting: bool,
@@ -280,6 +282,8 @@ impl State {
             focused: true,
             blink_on: true,
             last_blink: now,
+            text_blink_on: true,
+            last_text_blink: now,
             mouse_pos: (0.0, 0.0),
             mouse_cell: (0, 0),
             selecting: false,
@@ -1233,8 +1237,12 @@ impl State {
             if t.sync_output {
                 skip_draw = true;
             } else {
-                let view =
-                    View { focused: self.focused, blink_on: self.blink_on, search: self.search.as_ref() };
+                let view = View {
+                    focused: self.focused,
+                    blink_on: self.blink_on,
+                    text_blink_on: self.text_blink_on,
+                    search: self.search.as_ref(),
+                };
                 self.renderer.build(&t, &view);
             }
         }
@@ -1282,6 +1290,19 @@ impl State {
             at(next);
         } else if !self.blink_on {
             self.blink_on = true;
+            self.window.request_redraw();
+        }
+        if self.focused && self.renderer.blinking_text() {
+            let mut next = self.last_text_blink + BLINK_INTERVAL;
+            if now >= next {
+                self.text_blink_on = !self.text_blink_on;
+                self.last_text_blink = now;
+                next = now + BLINK_INTERVAL;
+                self.window.request_redraw();
+            }
+            at(next);
+        } else if !self.text_blink_on {
+            self.text_blink_on = true;
             self.window.request_redraw();
         }
         if let Some(end) = self.renderer.settings_anim_wake(now) {

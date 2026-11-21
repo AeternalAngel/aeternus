@@ -35,6 +35,7 @@ const BELL_FLASH: Duration = Duration::from_millis(120);
 pub struct View<'a> {
     pub focused: bool,
     pub blink_on: bool,
+    pub text_blink_on: bool,
     pub search: Option<&'a Search>,
 }
 #[repr(C)]
@@ -108,6 +109,51 @@ fn outline(out: &mut Vec<Instance>, x: f32, y: f32, w: f32, h: f32, thick: f32, 
     out.push(Instance::rect(x, y + h - thick, w, thick, col));
     out.push(Instance::rect(x, y, thick, h, col));
     out.push(Instance::rect(x + w - thick, y, thick, h, col));
+}
+#[allow(clippy::too_many_arguments)]
+fn underline(
+    out: &mut Vec<Instance>,
+    style: u16,
+    x: f32,
+    y: f32,
+    w: f32,
+    cw: f32,
+    ch: f32,
+    thick: f32,
+    origin: f32,
+    col: [u8; 3],
+) {
+    let base = y + ch - thick * 2.0;
+    match style {
+        flags::UNDERLINE_DOUBLE => {
+            out.push(Instance::rect(x, base, w, thick, col));
+            out.push(Instance::rect(x, base - thick * 2.0, w, thick, col));
+        }
+        flags::UNDERLINE_DOTTED => {
+            let step = thick * 2.0;
+            for i in 0..(w / step).floor() as usize {
+                out.push(Instance::rect(x + i as f32 * step, base, thick, thick, col));
+            }
+        }
+        flags::UNDERLINE_DASHED => {
+            let (gap, dash) = ((cw * 0.2).round(), (cw * 0.6).round().max(thick));
+            for u in 0..(w / cw).round().max(1.0) as usize {
+                out.push(Instance::rect(x + u as f32 * cw + gap, base, dash, thick, col));
+            }
+        }
+        flags::UNDERLINE_CURLY => {
+            let amp = (ch * 0.08).ceil().max(thick);
+            let k = std::f32::consts::TAU / cw;
+            let h = thick + amp * k;
+            let mid = y + ch - amp - h / 2.0;
+            for i in 0..w.round() as usize {
+                let px = x + i as f32;
+                let py = mid + amp * ((px - origin) * k).sin();
+                out.push(Instance::rect(px, py - h / 2.0, 1.0, h, col));
+            }
+        }
+        _ => out.push(Instance::rect(x, base, w, thick, col)),
+    }
 }
 fn square_outline(out: &mut Vec<Instance>, x: f32, y: f32, s: f32, thick: f32, col: [u8; 3]) {
     outline(out, x, y, s, s, thick, col);
@@ -340,6 +386,7 @@ pub struct Renderer {
     trail_cfg: TrailConfig,
     trail_color: Option<[u8; 3]>,
     flash_until: Option<Instant>,
+    blinking_text: bool,
 }
 impl Renderer {
     pub fn new(window: Arc<Window>, cfg: &Config) -> Result<Self, String> {
@@ -614,6 +661,7 @@ impl Renderer {
             trail_cfg: trail_config(cfg),
             trail_color: cfg.trail_color,
             flash_until: None,
+            blinking_text: false,
         };
         r.set_shortcuts(cfg);
         r.write_globals();
@@ -784,6 +832,9 @@ impl Renderer {
     }
     pub fn flash(&mut self, now: Instant) {
         self.flash_until = Some(now + BELL_FLASH);
+    }
+    pub fn blinking_text(&self) -> bool {
+        self.blinking_text
     }
     pub fn flash_deadline(&self) -> Option<Instant> {
         self.flash_until
@@ -987,6 +1038,7 @@ impl Renderer {
         let current_bg = pal.ansi[3];
         let current_fg = if luma(current_bg) >= 128 { [0, 0, 0] } else { [255, 255, 255] };
         let mut hits: Vec<(usize, usize, bool)> = Vec::new();
+        self.blinking_text = false;
         for r in 0..term.rows() {
             let y = top + r as f32 * ch;
             let abs = term.abs_line(r);
@@ -1054,7 +1106,14 @@ impl Renderer {
                 if bg != pal.bg {
                     bgs.push(Instance::rect(x, y, w, ch, bg));
                 }
-                if cell.ch != ' ' && cell.flags & flags::HIDDEN == 0 {
+                let decorated =
+                    cell.flags & (flags::UNDERLINE | flags::STRIKE) != 0 || term.link(&cell).is_some();
+                let blinks = cell.flags & flags::BLINK != 0
+                    && cell.flags & flags::HIDDEN == 0
+                    && (cell.ch != ' ' || decorated);
+                self.blinking_text |= blinks;
+                let blinked_out = blinks && !view.text_blink_on;
+                if cell.ch != ' ' && cell.flags & flags::HIDDEN == 0 && !blinked_out {
                     let bold = cell.flags & flags::BOLD != 0;
                     let italic = cell.flags & flags::ITALIC != 0;
                     let glyphs: Vec<GlyphInfo> = match term.cluster(&cell) {
@@ -1084,10 +1143,16 @@ impl Renderer {
                         });
                     }
                 }
-                if cell.flags & flags::UNDERLINE != 0 || term.link(&cell).is_some() {
-                    fgs.push(Instance::rect(x, y + ch - thick * 2.0, w, thick, fg));
+                if !blinked_out && (cell.flags & flags::UNDERLINE != 0 || term.link(&cell).is_some()) {
+                    let style = if cell.flags & flags::UNDERLINE != 0 {
+                        cell.flags & flags::UNDERLINE_STYLE
+                    } else {
+                        0
+                    };
+                    let col = term.underline_color(&cell).map_or(fg, |c| pal.rgb(c, fg));
+                    underline(&mut fgs, style, x, y, w, cw, ch, thick, pad, col);
                 }
-                if cell.flags & flags::STRIKE != 0 {
+                if !blinked_out && cell.flags & flags::STRIKE != 0 {
                     fgs.push(Instance::rect(x, y + (ch / 2.0).floor(), w, thick, fg));
                 }
                 if at_cursor && !block_cursor {

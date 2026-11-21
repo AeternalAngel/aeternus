@@ -88,30 +88,45 @@ struct SavedCursor {
 }
 #[derive(Default)]
 struct Extras {
-    items: Vec<(u32, u32)>,
-    ids: HashMap<(u32, u32), u16>,
+    items: Vec<(u32, u32, u32)>,
+    ids: HashMap<(u32, u32, u32), u16>,
 }
 impl Extras {
-    fn id(&mut self, cluster: u32, link: u32) -> u16 {
-        if cluster == 0 && link == 0 {
+    fn id(&mut self, cluster: u32, link: u32, underline: u32) -> u16 {
+        let key = (cluster, link, underline);
+        if key == (0, 0, 0) {
             return 0;
         }
-        if let Some(&id) = self.ids.get(&(cluster, link)) {
+        if let Some(&id) = self.ids.get(&key) {
             return id;
         }
         if self.items.len() >= u16::MAX as usize {
             return 0;
         }
-        self.items.push((cluster, link));
+        self.items.push(key);
         let id = self.items.len() as u16;
-        self.ids.insert((cluster, link), id);
+        self.ids.insert(key, id);
         id
     }
-    fn get(&self, id: u16) -> (u32, u32) {
+    fn get(&self, id: u16) -> (u32, u32, u32) {
         if id == 0 {
-            return (0, 0);
+            return (0, 0, 0);
         }
-        self.items.get(id as usize - 1).copied().unwrap_or((0, 0))
+        self.items.get(id as usize - 1).copied().unwrap_or((0, 0, 0))
+    }
+}
+fn encode_color(c: Color) -> u32 {
+    match c {
+        Color::Default => 0,
+        Color::Indexed(i) => 1 << 24 | i as u32,
+        Color::Rgb(r, g, b) => 2 << 24 | (r as u32) << 16 | (g as u32) << 8 | b as u32,
+    }
+}
+fn decode_color(v: u32) -> Color {
+    match v >> 24 {
+        1 => Color::Indexed(v as u8),
+        2 => Color::Rgb((v >> 16) as u8, (v >> 8) as u8, v as u8),
+        _ => Color::Default,
     }
 }
 #[derive(Default)]
@@ -296,6 +311,12 @@ impl Term {
     }
     pub fn link(&self, cell: &Cell) -> Option<&str> {
         self.links.get(self.extras.get(cell.extra).1)
+    }
+    pub fn underline_color(&self, cell: &Cell) -> Option<Color> {
+        match decode_color(self.extras.get(cell.extra).2) {
+            Color::Default => None,
+            c => Some(c),
+        }
     }
     pub fn visible_row(&self, r: usize) -> &[Cell] {
         let sb = self.scrollback.len();
@@ -1177,20 +1198,16 @@ impl Term {
                     } else {
                         1
                     };
-                    if style == 0 {
-                        self.pen.flags &= !flags::UNDERLINE;
-                    } else {
-                        self.pen.flags |= flags::UNDERLINE;
-                    }
+                    self.set_underline(style);
                 }
-                21 => self.pen.flags |= flags::UNDERLINE,
+                21 => self.set_underline(2),
                 5 | 6 => self.pen.flags |= flags::BLINK,
                 7 => self.pen.flags |= flags::INVERSE,
                 8 => self.pen.flags |= flags::HIDDEN,
                 9 => self.pen.flags |= flags::STRIKE,
                 22 => self.pen.flags &= !(flags::BOLD | flags::DIM),
                 23 => self.pen.flags &= !flags::ITALIC,
-                24 => self.pen.flags &= !flags::UNDERLINE,
+                24 => self.set_underline(0),
                 25 => self.pen.flags &= !flags::BLINK,
                 27 => self.pen.flags &= !flags::INVERSE,
                 28 => self.pen.flags &= !flags::HIDDEN,
@@ -1210,9 +1227,11 @@ impl Term {
                 }
                 49 => self.pen.bg = Color::Default,
                 58 => {
-                    let _ = extended_color(params, subs, &mut i);
+                    if let Some(c) = extended_color(params, subs, &mut i) {
+                        self.set_underline_color(c);
+                    }
                 }
-                59 => {}
+                59 => self.set_underline_color(Color::Default),
                 90..=97 => self.pen.fg = Color::Indexed((p - 90 + 8) as u8),
                 100..=107 => self.pen.bg = Color::Indexed((p - 100 + 8) as u8),
                 _ => {}
@@ -1224,6 +1243,22 @@ impl Term {
         let extra = self.pen.extra;
         self.pen = Pen::DEFAULT;
         self.pen.extra = extra;
+        self.set_underline_color(Color::Default);
+    }
+    fn set_underline(&mut self, style: u16) {
+        self.pen.flags &= !(flags::UNDERLINE | flags::UNDERLINE_STYLE);
+        self.pen.flags |= match style {
+            0 => 0,
+            2 => flags::UNDERLINE | flags::UNDERLINE_DOUBLE,
+            3 => flags::UNDERLINE | flags::UNDERLINE_CURLY,
+            4 => flags::UNDERLINE | flags::UNDERLINE_DOTTED,
+            5 => flags::UNDERLINE | flags::UNDERLINE_DASHED,
+            _ => flags::UNDERLINE,
+        };
+    }
+    fn set_underline_color(&mut self, c: Color) {
+        let (_, link, _) = self.extras.get(self.pen.extra);
+        self.pen.extra = self.extras.id(0, link, encode_color(c));
     }
     fn prev_cell_pos(&self) -> Option<(usize, usize)> {
         let row = self.cursor.row;
@@ -1238,7 +1273,7 @@ impl Term {
             return false;
         };
         let cell = self.grid.row(r)[col];
-        let (cluster, link) = self.extras.get(cell.extra);
+        let (cluster, link, underline) = self.extras.get(cell.extra);
         let mut s = self.clusters.get(cluster).unwrap_or("").to_string();
         if s.chars().count() >= 16 {
             return true;
@@ -1246,7 +1281,7 @@ impl Term {
         s.push(c);
         let id = self.clusters.intern(&s);
         if id != 0 {
-            let extra = self.extras.id(id, link);
+            let extra = self.extras.id(id, link, underline);
             if extra != 0 {
                 self.grid.row_mut(r)[col].extra = extra;
             }
@@ -1848,13 +1883,13 @@ impl Perform for Term {
                 let mut it = rest.splitn(2, |&b| b == b';');
                 let _params = it.next();
                 let uri = it.next().unwrap_or(&[]);
-                self.pen.extra = if uri.is_empty() || uri.len() > MAX_LINK_LEN {
+                let (_, _, underline) = self.extras.get(self.pen.extra);
+                let link = if uri.is_empty() || uri.len() > MAX_LINK_LEN {
                     0
                 } else {
-                    let s = String::from_utf8_lossy(uri);
-                    let link = self.links.intern(&s);
-                    self.extras.id(0, link)
+                    self.links.intern(&String::from_utf8_lossy(uri))
                 };
+                self.pen.extra = self.extras.id(0, link, underline);
             }
             b"10" | b"11" | b"12" => {
                 if rest == b"?" {
@@ -2087,13 +2122,60 @@ mod tests {
         assert_eq!(cell.flags & flags::BOLD, flags::BOLD);
     }
     #[test]
-    fn sgr_58_59_ignored_without_breaking_params() {
+    fn sgr_58_59_do_not_break_params() {
         let mut t = Term::new(5, 1);
         feed(&mut t, "\x1b[58:2::1:2:3;59;1mx");
         let cell = t.grid.row(0)[0];
         assert_eq!(cell.fg, Color::Default);
         assert_eq!(cell.bg, Color::Default);
         assert_eq!(cell.flags & flags::BOLD, flags::BOLD);
+        assert_eq!(t.underline_color(&cell), None);
+    }
+    #[test]
+    fn sgr_58_sets_underline_color() {
+        let mut t = Term::new(10, 1);
+        feed(&mut t, "\x1b[4;58:2::1:2:3ma\x1b[58;5;9mb\x1b[59mc\x1b[58:5:4md\x1b[0me");
+        let row = t.grid.row(0);
+        assert_eq!(t.underline_color(&row[0]), Some(Color::Rgb(1, 2, 3)));
+        assert_eq!(t.underline_color(&row[1]), Some(Color::Indexed(9)));
+        assert_eq!(t.underline_color(&row[2]), None);
+        assert_eq!(t.underline_color(&row[3]), Some(Color::Indexed(4)));
+        assert_eq!(t.underline_color(&row[4]), None);
+    }
+    #[test]
+    fn underline_color_survives_links_and_combining_marks() {
+        let mut t = Term::new(10, 1);
+        feed(&mut t, "\x1b[58;2;7;8;9m\x1b]8;;https://a.b\x1b\\e\u{0301}\x1b]8;;\x1b\\x");
+        let row = t.grid.row(0);
+        assert_eq!(t.underline_color(&row[0]), Some(Color::Rgb(7, 8, 9)));
+        assert_eq!(t.link(&row[0]), Some("https://a.b"));
+        assert_eq!(t.cluster(&row[0]), Some("\u{0301}"));
+        assert_eq!(t.underline_color(&row[1]), Some(Color::Rgb(7, 8, 9)));
+        assert_eq!(t.link(&row[1]), None);
+    }
+    #[test]
+    fn sgr_underline_styles() {
+        let mut t = Term::new(10, 1);
+        feed(&mut t, "\x1b[4ma\x1b[4:2mb\x1b[4:3mc\x1b[4:4md\x1b[4:5me\x1b[21mf\x1b[24mg\x1b[4:3;4mh");
+        let style = |c: usize| {
+            let f = t.grid.row(0)[c].flags;
+            (f & flags::UNDERLINE != 0, f & flags::UNDERLINE_STYLE)
+        };
+        assert_eq!(style(0), (true, 0));
+        assert_eq!(style(1), (true, flags::UNDERLINE_DOUBLE));
+        assert_eq!(style(2), (true, flags::UNDERLINE_CURLY));
+        assert_eq!(style(3), (true, flags::UNDERLINE_DOTTED));
+        assert_eq!(style(4), (true, flags::UNDERLINE_DASHED));
+        assert_eq!(style(5), (true, flags::UNDERLINE_DOUBLE));
+        assert_eq!(style(6), (false, 0));
+        assert_eq!(style(7), (true, 0));
+    }
+    #[test]
+    fn sgr_blink_flag() {
+        let mut t = Term::new(10, 1);
+        feed(&mut t, "\x1b[5ma\x1b[25mb\x1b[6mc\x1b[0md");
+        let blink = |c: usize| t.grid.row(0)[c].flags & flags::BLINK != 0;
+        assert!(blink(0) && !blink(1) && blink(2) && !blink(3));
     }
     #[test]
     fn selection_basic_text() {

@@ -9,6 +9,9 @@ All notable changes to this project are documented here. The format is based on
 ### Added
 
 - Scrollback search: `Ctrl+Shift+F` or Edit > Find opens a search bar in the top right corner. Matches in the history and on screen are highlighted as you type, and the bar shows the selected match and the total (for example `3/17`). `Enter` or `Up` goes to the previous (older) match, `Shift+Enter` or `Down` to the next, `Ctrl+Backspace` clears the query and `Esc` closes the bar. Matches can continue across wrapped lines, and the search ignores case unless the query has an uppercase letter. On the alternate screen only the visible screen is searched. The shortcut is the new `search` keybinding.
+- Underline styles: `CSI 4:2 m` (double), `4:3` (curly), `4:4` (dotted) and `4:5` (dashed) are now drawn as such instead of as a single underline. `CSI 21 m` draws a double underline, as in kitty.
+- Underline color: `CSI 58 m` (indexed or RGB, with `;` or `:`) sets the underline color and `CSI 59 m` resets it to the text color. Previously the color was parsed and discarded.
+- Blinking text: cells with `CSI 5 m` or `CSI 6 m` now blink at the cursor blink rate while the window is focused. Blinking stops, with the text shown, when the window loses focus.
 
 ## [1.4.2] - 2026-11-20
 
