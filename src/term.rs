@@ -45,6 +45,11 @@ pub struct SelPoint {
     pub line: usize,
     pub col: usize,
 }
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct SearchMatch {
+    pub start: SelPoint,
+    pub end: SelPoint,
+}
 #[derive(Clone, Copy, Debug)]
 struct Selection {
     anchor: SelPoint,
@@ -335,6 +340,77 @@ impl Term {
     }
     pub fn abs_line(&self, row: usize) -> usize {
         self.popped + self.scrollback.len().saturating_sub(self.display_offset) + row
+    }
+    pub fn search(&self, query: &str, limit: usize) -> Vec<SearchMatch> {
+        let smart = query.chars().any(char::is_uppercase);
+        let norm = |c: char| if smart { c } else { fold_case(c) };
+        let needle: Vec<char> = query.chars().map(norm).collect();
+        let mut out = Vec::new();
+        if needle.is_empty() || limit == 0 {
+            return out;
+        }
+        let sb = self.scrollback.len();
+        let first = if self.is_alt_screen() { self.popped + sb } else { self.popped };
+        let end = self.popped + sb + self.rows();
+        let mut chars: Vec<char> = Vec::new();
+        let mut pos: Vec<SelPoint> = Vec::new();
+        let mut line = first;
+        while line < end {
+            chars.clear();
+            pos.clear();
+            loop {
+                let cells = self.line_cells(line).unwrap_or(&[]);
+                for (col, c) in cells.iter().enumerate() {
+                    if c.flags & WIDE_SPACER != 0 {
+                        continue;
+                    }
+                    let p = SelPoint { line, col };
+                    chars.push(norm(c.ch));
+                    pos.push(p);
+                    if let Some(extra) = self.cluster(c) {
+                        for e in extra.chars() {
+                            chars.push(norm(e));
+                            pos.push(p);
+                        }
+                    }
+                }
+                line += 1;
+                let wrapped = cells.last().is_some_and(|c| c.flags & WRAPLINE != 0);
+                if !wrapped || line >= end {
+                    break;
+                }
+            }
+            let mut i = 0;
+            while i + needle.len() <= chars.len() {
+                if chars[i..i + needle.len()] == needle[..] {
+                    out.push(SearchMatch { start: pos[i], end: pos[i + needle.len() - 1] });
+                    if out.len() >= limit.saturating_mul(2) {
+                        out.drain(..limit);
+                    }
+                    i += needle.len();
+                } else {
+                    i += 1;
+                }
+            }
+        }
+        if out.len() > limit {
+            out.drain(..out.len() - limit);
+        }
+        out
+    }
+    pub fn scroll_to_line(&mut self, abs: usize) -> bool {
+        if self.is_alt_screen() {
+            return false;
+        }
+        let rows = self.rows();
+        if abs >= self.abs_line(0) && abs <= self.abs_line(rows.saturating_sub(1)) {
+            return false;
+        }
+        let sb = self.scrollback.len();
+        let target = (self.popped + sb + rows / 2).saturating_sub(abs).min(sb);
+        let changed = target != self.display_offset;
+        self.display_offset = target;
+        changed
     }
     fn line_cells(&self, abs: usize) -> Option<&[Cell]> {
         let idx = abs.checked_sub(self.popped)?;
@@ -1358,6 +1434,13 @@ fn fix_wide_pairs(g: &mut Grid) {
         }
     }
 }
+fn fold_case(c: char) -> char {
+    let mut lower = c.to_lowercase();
+    match (lower.next(), lower.next()) {
+        (Some(l), None) => l,
+        _ => c,
+    }
+}
 fn char_kind(c: char) -> u8 {
     if c == ' ' || c == '\0' {
         0
@@ -1838,6 +1921,65 @@ mod tests {
     fn feed(t: &mut Term, s: &str) {
         let mut p = Parser::new();
         p.advance(t, s.as_bytes());
+    }
+    fn spans(t: &Term, q: &str) -> Vec<(usize, usize, usize, usize)> {
+        t.search(q, usize::MAX).iter().map(|m| (m.start.line, m.start.col, m.end.line, m.end.col)).collect()
+    }
+    #[test]
+    fn search_finds_matches_in_scrollback_and_screen() {
+        let mut t = Term::new(20, 3);
+        feed(&mut t, "foo one\r\nbar\r\nfoo two\r\nbaz\r\nfoo three");
+        assert_eq!(spans(&t, "foo"), vec![(0, 0, 0, 2), (2, 0, 2, 2), (4, 0, 4, 2)]);
+        assert!(spans(&t, "nothing").is_empty());
+        assert!(spans(&t, "").is_empty());
+    }
+    #[test]
+    fn search_smart_case() {
+        let mut t = Term::new(20, 3);
+        feed(&mut t, "Hello hello HELLO");
+        assert_eq!(spans(&t, "hello").len(), 3);
+        assert_eq!(spans(&t, "Hello"), vec![(0, 0, 0, 4)]);
+        assert_eq!(spans(&t, "HELLO"), vec![(0, 12, 0, 16)]);
+    }
+    #[test]
+    fn search_spans_wrapped_rows_but_not_line_breaks() {
+        let mut t = Term::new(5, 4);
+        feed(&mut t, "abcdefgh\r\nxy\r\nzw");
+        assert_eq!(spans(&t, "def"), vec![(0, 3, 1, 0)]);
+        assert!(spans(&t, "yz").is_empty());
+    }
+    #[test]
+    fn search_skips_wide_spacers() {
+        let mut t = Term::new(10, 2);
+        feed(&mut t, "你好吗");
+        assert_eq!(spans(&t, "好吗"), vec![(0, 2, 0, 4)]);
+    }
+    #[test]
+    fn search_keeps_most_recent_when_limited() {
+        let mut t = Term::new(10, 3);
+        feed(&mut t, "a\r\na\r\na\r\na\r\na");
+        let m = t.search("a", 2);
+        assert_eq!(m.len(), 2);
+        assert_eq!((m[0].start.line, m[1].start.line), (3, 4));
+    }
+    #[test]
+    fn search_alt_screen_only_searches_screen() {
+        let mut t = Term::new(10, 2);
+        feed(&mut t, "x1\r\nx2\r\nx3\r\n\x1b[?1049h\x1b[Hx4");
+        let m = t.search("x", usize::MAX);
+        assert_eq!(m.len(), 1);
+        assert_eq!(m[0].start.line, t.abs_line(0));
+    }
+    #[test]
+    fn scroll_to_line_brings_match_into_view() {
+        let mut t = Term::new(10, 3);
+        for i in 0..20 {
+            feed(&mut t, &format!("line{i}\r\n"));
+        }
+        let m = t.search("line2", usize::MAX)[0];
+        assert!(t.scroll_to_line(m.start.line));
+        assert!(t.abs_line(0) <= m.start.line && m.start.line <= t.abs_line(t.rows() - 1));
+        assert!(!t.scroll_to_line(m.start.line));
     }
     #[test]
     fn scroll_region() {

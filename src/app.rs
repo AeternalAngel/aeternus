@@ -25,6 +25,7 @@ use crate::log;
 use crate::parser::Parser;
 use crate::pty::{self, Pty, Size};
 use crate::render::{Action, Renderer, SettingsOutcome, View};
+use crate::search::Search;
 use crate::term::{MouseMode, SelMode, Term};
 
 pub const APP_ID: &str = "io.github.AeternalAngel.Aeternus";
@@ -242,6 +243,7 @@ struct State {
     click_count: u8,
     config_mtime: Option<std::time::SystemTime>,
     last_config_check: Instant,
+    search: Option<Search>,
     quit: bool,
 }
 
@@ -287,6 +289,7 @@ impl State {
             click_count: 0,
             config_mtime,
             last_config_check: now,
+            search: None,
             quit: false,
         };
         let cwd =
@@ -379,6 +382,7 @@ impl State {
             .map_err(|e| format!("could not start the reader thread: {e}"))?;
         self.tabs.push(Tab { id, term, pty: Some(pty), dirty, want_lock, reader: handle.thread().clone() });
         self.active = self.tabs.len() - 1;
+        self.search_retarget();
         self.renderer.reset_trail();
         self.sync_tabs();
         self.renderer.ensure_tab_visible(id);
@@ -406,6 +410,7 @@ impl State {
         }
         self.active = self.active.min(self.tabs.len() - 1);
         self.selecting = false;
+        self.search_retarget();
         self.renderer.reset_trail();
         self.sync_tabs();
         let id = self.active_tab().id;
@@ -419,6 +424,7 @@ impl State {
         }
         self.active = idx;
         self.selecting = false;
+        self.search_retarget();
         self.reset_blink();
         self.renderer.reset_trail();
         self.sync_tabs();
@@ -448,6 +454,9 @@ impl State {
         t.cell_px = cell_px;
         if size.cols as usize != t.cols() || size.rows as usize != t.rows() {
             t.resize(size.cols as usize, size.rows as usize);
+            if let Some(s) = self.search.as_mut() {
+                s.mark_stale();
+            }
             if let Some(p) = &tab.pty {
                 p.resize(size);
             }
@@ -539,6 +548,18 @@ impl State {
             self.window.request_redraw();
             return;
         }
+        if self.search.is_some() {
+            let line = text.lines().next().unwrap_or("").replace(|c: char| c.is_control(), "");
+            if !line.is_empty() {
+                let term = self.term();
+                let mut t = term.lock().unwrap_or_else(|e| e.into_inner());
+                if let Some(s) = self.search.as_mut() {
+                    s.push_str(&mut t, &line);
+                }
+            }
+            self.window.request_redraw();
+            return;
+        }
         let bracketed = self.with_term(|t| {
             t.scroll_to_bottom();
             t.selection_clear();
@@ -562,16 +583,7 @@ impl State {
         }
         let key = key_input(event);
         if self.renderer.settings_open() {
-            let paste = self
-                .cfg
-                .keymap
-                .0
-                .iter()
-                .any(|(c, a)| *a == KeyAction::Paste && input::combo_matches(c, &key, mods))
-                || (mods.control_key()
-                    && !mods.shift_key()
-                    && matches!(&event.logical_key, Key::Character(c) if c.eq_ignore_ascii_case("v")));
-            if paste {
+            if self.wants_paste(event, &key, mods) {
                 self.paste(ClipKind::Clipboard);
                 return;
             }
@@ -583,6 +595,10 @@ impl State {
             if let Key::Named(NamedKey::Escape) = &event.logical_key {
                 self.close_menus();
             }
+            return;
+        }
+        if self.search.is_some() {
+            self.search_key(event, &key, mods);
             return;
         }
         if self.cfg.terminal.smart_copy_paste
@@ -626,6 +642,84 @@ impl State {
             self.window.request_redraw();
         }
     }
+    fn wants_paste(&self, event: &KeyEvent, key: &KeyInput, mods: ModifiersState) -> bool {
+        self.cfg.keymap.0.iter().any(|(c, a)| *a == KeyAction::Paste && input::combo_matches(c, key, mods))
+            || (mods.control_key()
+                && !mods.shift_key()
+                && matches!(&event.logical_key, Key::Character(c) if c.eq_ignore_ascii_case("v")))
+    }
+    fn open_search(&mut self) {
+        if self.search.is_none() {
+            self.search = Some(Search::new());
+        }
+        self.window.request_redraw();
+    }
+    fn close_search(&mut self) {
+        self.search = None;
+        self.window.request_redraw();
+    }
+    fn search_retarget(&mut self) {
+        if self.search.is_none() {
+            return;
+        }
+        let term = self.term();
+        let mut t = term.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(s) = self.search.as_mut() {
+            let q = std::mem::take(&mut s.query);
+            s.set_query(&mut t, q);
+        }
+    }
+    fn search_key(&mut self, event: &KeyEvent, key: &KeyInput, mods: ModifiersState) {
+        if self.wants_paste(event, key, mods) {
+            self.paste(ClipKind::Clipboard);
+            return;
+        }
+        enum Edit<'a> {
+            Step(bool),
+            Pop,
+            Clear,
+            Push(&'a str),
+        }
+        let plain = !mods.control_key() && !mods.alt_key() && !mods.super_key();
+        let edit = match &event.logical_key {
+            Key::Named(NamedKey::Escape) => return self.close_search(),
+            Key::Named(NamedKey::Enter) => Edit::Step(!mods.shift_key()),
+            Key::Named(NamedKey::ArrowUp) => Edit::Step(true),
+            Key::Named(NamedKey::ArrowDown) => Edit::Step(false),
+            Key::Named(NamedKey::Backspace) if mods.control_key() => Edit::Clear,
+            Key::Named(NamedKey::Backspace) => Edit::Pop,
+            _ => {
+                let action = self
+                    .cfg
+                    .keymap
+                    .0
+                    .iter()
+                    .find(|(c, _)| input::combo_matches(c, key, mods))
+                    .map(|(_, a)| *a);
+                if let Some(action) = action {
+                    if action != KeyAction::Search {
+                        self.run_key_action(action);
+                    }
+                    return;
+                }
+                match event.text.as_deref() {
+                    Some(t) if plain && !t.is_empty() && !t.chars().any(char::is_control) => Edit::Push(t),
+                    _ => return,
+                }
+            }
+        };
+        let term = self.term();
+        let mut t = term.lock().unwrap_or_else(|e| e.into_inner());
+        let Some(s) = self.search.as_mut() else { return };
+        match edit {
+            Edit::Step(up) => s.step(&mut t, up),
+            Edit::Pop => s.pop_char(&mut t),
+            Edit::Clear => s.clear_query(&mut t),
+            Edit::Push(text) => s.push_str(&mut t, text),
+        }
+        drop(t);
+        self.window.request_redraw();
+    }
     fn run_key_action(&mut self, action: KeyAction) -> bool {
         let a = match action {
             KeyAction::Copy => Action::Copy,
@@ -641,6 +735,7 @@ impl State {
             KeyAction::PrevTab => Action::PrevTab,
             KeyAction::Fullscreen => Action::Fullscreen,
             KeyAction::Preferences => Action::Settings,
+            KeyAction::Search => Action::Find,
             KeyAction::ScrollPageUp
             | KeyAction::ScrollPageDown
             | KeyAction::ScrollToTop
@@ -860,7 +955,12 @@ impl State {
             Action::ScrollBottom => {
                 self.with_term(|t| t.scroll_display(isize::MIN));
             }
-            Action::ResetTerm => self.with_term(|t| t.reset()),
+            Action::ResetTerm => {
+                self.with_term(|t| t.reset());
+                if let Some(s) = self.search.as_mut() {
+                    s.mark_stale();
+                }
+            }
             Action::Reload => self.reload_config(),
             Action::Settings => self.renderer.open_settings(&self.cfg),
             Action::Quit => self.quit = true,
@@ -871,6 +971,7 @@ impl State {
             }
             Action::NextTab => self.cycle_tab(1),
             Action::PrevTab => self.cycle_tab(-1),
+            Action::Find => self.open_search(),
             Action::Fullscreen => {
                 let on = self.window.fullscreen().is_some();
                 self.window.set_fullscreen(if on { None } else { Some(Fullscreen::Borderless(None)) });
@@ -1095,6 +1196,9 @@ impl State {
             }
         }
         if idx == self.active {
+            if let Some(s) = self.search.as_mut() {
+                s.mark_stale();
+            }
             self.window.request_redraw();
         } else {
             self.tabs[idx].dirty.store(false, Ordering::Release);
@@ -1119,11 +1223,18 @@ impl State {
             if !t.title.is_empty() && t.title != self.last_title {
                 title = Some(t.title.clone());
             }
-            t.expire_sync(Instant::now());
+            let now = Instant::now();
+            t.expire_sync(now);
+            if let Some(s) = self.search.as_mut() {
+                if s.refresh_due().is_some_and(|due| due <= now) {
+                    s.refresh(&t, now);
+                }
+            }
             if t.sync_output {
                 skip_draw = true;
             } else {
-                let view = View { focused: self.focused, blink_on: self.blink_on };
+                let view =
+                    View { focused: self.focused, blink_on: self.blink_on, search: self.search.as_ref() };
                 self.renderer.build(&t, &view);
             }
         }
@@ -1180,6 +1291,12 @@ impl State {
         if self.renderer.trail_animating() {
             self.window.request_redraw();
             at(now + FRAME);
+        }
+        if let Some(due) = self.search.as_ref().and_then(Search::refresh_due) {
+            if due <= now {
+                self.window.request_redraw();
+            }
+            at(due.max(now));
         }
         if let Some(end) = self.renderer.flash_deadline() {
             self.window.request_redraw();

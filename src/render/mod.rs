@@ -18,6 +18,7 @@ use crate::cell::{flags, Cell};
 use crate::colors::Palette;
 use crate::config::{Config, TextComposition};
 use crate::log;
+use crate::search::Search;
 use crate::term::{CursorShape, Term, WIDE_SPACER};
 
 pub use settings::SettingsOutcome;
@@ -31,9 +32,10 @@ const SENTINEL: [u8; 3] = [1, 2, 3];
 const ART_INK: [u8; 3] = [2, 4, 6];
 const BELL_FLASH: Duration = Duration::from_millis(120);
 
-pub struct View {
+pub struct View<'a> {
     pub focused: bool,
     pub blink_on: bool,
+    pub search: Option<&'a Search>,
 }
 #[repr(C)]
 #[derive(Clone, Copy, Pod, Zeroable)]
@@ -933,7 +935,7 @@ impl Renderer {
         }
         out
     }
-    pub fn build(&mut self, term: &Term, view: &View) {
+    pub fn build(&mut self, term: &Term, view: &View<'_>) {
         self.atlas_reset = false;
         self.build_pass(term, view);
         if self.atlas_reset {
@@ -941,7 +943,7 @@ impl Renderer {
             self.build_pass(term, view);
         }
     }
-    fn build_pass(&mut self, term: &Term, view: &View) {
+    fn build_pass(&mut self, term: &Term, view: &View<'_>) {
         let mut bgs = std::mem::take(&mut self.bg_inst);
         let mut fgs = std::mem::take(&mut self.fg_inst);
         bgs.clear();
@@ -974,6 +976,17 @@ impl Renderer {
         let cursor_shown = term.cursor_visible && term.display_offset == 0;
         let cursor_vis = cursor_shown && (!view.focused || !term.cursor_blink || view.blink_on);
         let block = view.focused && term.cursor_shape == CursorShape::Block;
+        let matches = view.search.map_or(&[][..], |s| {
+            let (first, last) = (term.abs_line(0), term.abs_line(term.rows().saturating_sub(1)));
+            let lo = s.matches.partition_point(|m| m.end.line < first);
+            let hi = s.matches.partition_point(|m| m.start.line <= last);
+            &s.matches[lo..hi.max(lo)]
+        });
+        let current = view.search.and_then(Search::current_match);
+        let match_bg = mix(pal.bg, pal.ansi[3], 0.4);
+        let current_bg = pal.ansi[3];
+        let current_fg = if luma(current_bg) >= 128 { [0, 0, 0] } else { [255, 255, 255] };
+        let mut hits: Vec<(usize, usize, bool)> = Vec::new();
         for r in 0..term.rows() {
             let y = top + r as f32 * ch;
             let abs = term.abs_line(r);
@@ -986,12 +999,19 @@ impl Renderer {
                     Some((s, e))
                 }
             });
+            hits.clear();
+            for m in matches.iter().filter(|m| m.start.line <= abs && abs <= m.end.line) {
+                let s = if abs == m.start.line { m.start.col } else { 0 };
+                let e = if abs == m.end.line { m.end.col } else { usize::MAX };
+                hits.push((s, e, current == Some(*m)));
+            }
             let row = term.visible_row(r);
             for c in 0..cols {
                 let cell = row.get(c).copied().unwrap_or(Cell::BLANK);
                 let selected = span.is_some_and(|(s, e)| c >= s && c <= e);
+                let hit = hits.iter().find(|h| c >= h.0 && c <= h.1).map(|h| h.2);
                 let at_cursor = cursor_vis && r == term.cursor.row && c == term.cursor.col;
-                if cell == Cell::BLANK && !selected && !at_cursor {
+                if cell == Cell::BLANK && !selected && !at_cursor && hit.is_none() {
                     continue;
                 }
                 let is_spacer = cell.flags & WIDE_SPACER != 0;
@@ -1017,11 +1037,16 @@ impl Renderer {
                 if block_cursor {
                     fg = pal.cursor_text.unwrap_or(bg);
                     bg = pal.cursor;
+                } else if hit == Some(true) {
+                    fg = current_fg;
+                    bg = current_bg;
                 } else if selected {
                     bg = pal.selection;
                     if let Some(c) = pal.selection_fg {
                         fg = c;
                     }
+                } else if hit.is_some() {
+                    bg = match_bg;
                 }
                 if cell.flags & flags::DIM != 0 {
                     fg = fg.map(|v| (v as f32 * 0.6) as u8);
@@ -1098,6 +1123,9 @@ impl Renderer {
             for p in trail::hull_triangles(&q) {
                 self.poly.push(PolyVertex { pos: p, color: col });
             }
+        }
+        if let Some(s) = view.search {
+            self.push_search_bar(&mut fgs, s, &pal, thick);
         }
         if let Some(m) = self.open_menu {
             self.push_menu_panel(&mut fgs, m, pal.bg, pal.fg, thick);

@@ -22,7 +22,7 @@
 - **Text:** truecolor, 256 colors, bold/italic/underline/strikethrough, wide (CJK) characters, color emoji, combining accents, skin-tone modifiers and ZWJ emoji sequences, DEC line drawing.
 - **Links:** `Ctrl+click` opens URLs and OSC 8 hyperlinks.
 - **Compatibility:** alternate screen, bracketed paste, mouse reporting (1000/1002/1003/SGR), focus events, synchronized output (2026), kitty keyboard protocol (disambiguate level), cursor shapes, OSC 4/7/8/10/11/12/52, tab stops, insert/origin modes and more.
-- **Daily use:** 10k-line scrollback with reflow on resize, word/line selection, clipboard and primary selection, zoom, fullscreen, visual bell.
+- **Daily use:** 10k-line scrollback with reflow on resize and search, word/line selection, clipboard and primary selection, zoom, fullscreen, visual bell.
 - **Colors in kitty's format:** the same names as kitty (`foreground`, `selection_background`, `color0`…`color255`), kitty's default 16-color palette, and kitty `.conf` themes load directly.
 - **Text rendering** with gamma-correct blending like kitty, tunable with `text_composition_strategy` using the same gamma and contrast curve as kitty.
 - **Config:** a commented `config.toml`, reloaded automatically when it changes, with every shortcut configurable.
@@ -144,6 +144,7 @@ Use `aeternus --config <path>` to load a different file. Errors and warnings are
 | Next / previous tab | `Ctrl+Tab`, `Ctrl+PageDown` / `Ctrl+Shift+Tab`, `Ctrl+PageUp` | `next_tab`, `prev_tab` |
 | Zoom in / out / reset | `Ctrl+Shift+=` / `Ctrl+Shift+-` / `Ctrl+Shift+0`, `Ctrl+wheel` | `zoom_in`, `zoom_out`, `zoom_reset` |
 | Scroll history | `Shift+PageUp` / `Shift+PageDown` / `Shift+Home` / `Shift+End` | `scroll_page_up`, ... |
+| Search the scrollback | `Ctrl+Shift+F`; then `Enter`/`Shift+Enter` for previous/next, `Esc` to close | `search` |
 | Reload config | `Ctrl+Shift+R` | `reload_config` |
 | Fullscreen | `F11` | `fullscreen` |
 | Preferences | (none) | `preferences` |

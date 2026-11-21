@@ -11,4 +11,5 @@ pub mod log;
 pub mod parser;
 pub mod pty;
 pub mod render;
+pub mod search;
 pub mod term;

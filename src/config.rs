@@ -85,6 +85,7 @@ pub const TEMPLATE: &str = r##"# Aeternus configuration
 # scroll_page_down = ["shift+pagedown"]
 # scroll_to_top = ["shift+home"]
 # scroll_to_bottom = ["shift+end"]
+# search = ["ctrl+shift+f"]
 # new_tab = ["ctrl+shift+t"]
 # close_tab = ["ctrl+shift+w"]
 # next_tab = ["ctrl+tab", "ctrl+pagedown"]
@@ -279,6 +280,7 @@ pub struct KeybindingsConfig {
     pub scroll_page_down: Vec<String>,
     pub scroll_to_top: Vec<String>,
     pub scroll_to_bottom: Vec<String>,
+    pub search: Vec<String>,
     pub new_tab: Vec<String>,
     pub close_tab: Vec<String>,
     pub next_tab: Vec<String>,
@@ -302,6 +304,7 @@ impl Default for KeybindingsConfig {
             scroll_page_down: v(&["shift+pagedown"]),
             scroll_to_top: v(&["shift+home"]),
             scroll_to_bottom: v(&["shift+end"]),
+            search: v(&["ctrl+shift+f"]),
             new_tab: v(&["ctrl+shift+t"]),
             close_tab: v(&["ctrl+shift+w"]),
             next_tab: v(&["ctrl+tab", "ctrl+pagedown"]),
@@ -325,6 +328,7 @@ pub enum Action {
     ScrollPageDown,
     ScrollToTop,
     ScrollToBottom,
+    Search,
     NewTab,
     CloseTab,
     NextTab,
@@ -431,7 +435,7 @@ fn add_bindings(v: &mut Vec<(KeyCombo, Action)>, list: &[String], action: Action
 impl KeybindingsConfig {
     fn build(&self) -> Keymap {
         let mut v = Vec::new();
-        let table: [(&[String], Action); 17] = [
+        let table: [(&[String], Action); 18] = [
             (&self.copy, Action::Copy),
             (&self.paste, Action::Paste),
             (&self.paste_primary, Action::PastePrimary),
@@ -443,6 +447,7 @@ impl KeybindingsConfig {
             (&self.scroll_page_down, Action::ScrollPageDown),
             (&self.scroll_to_top, Action::ScrollToTop),
             (&self.scroll_to_bottom, Action::ScrollToBottom),
+            (&self.search, Action::Search),
             (&self.new_tab, Action::NewTab),
             (&self.close_tab, Action::CloseTab),
             (&self.next_tab, Action::NextTab),
@@ -781,6 +786,7 @@ mod tests {
             assert!(km.0.iter().any(|(_, x)| *x == a), "{a:?}");
         }
         assert!(km.label(Action::Preferences).is_none());
+        assert_eq!(km.label(Action::Search).as_deref(), Some("Ctrl+Shift+F"));
     }
 
     #[test]

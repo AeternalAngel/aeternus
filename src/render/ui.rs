@@ -1,5 +1,7 @@
 use super::{mix, x_cross, Instance, Renderer};
+use crate::colors::Palette;
 use crate::config::Action as KeyAction;
+use crate::search::Search;
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum Action {
@@ -22,6 +24,7 @@ pub enum Action {
     NextTab,
     PrevTab,
     Fullscreen,
+    Find,
 }
 
 impl Action {
@@ -42,6 +45,7 @@ impl Action {
             Action::NextTab => KeyAction::NextTab,
             Action::PrevTab => KeyAction::PrevTab,
             Action::Fullscreen => KeyAction::Fullscreen,
+            Action::Find => KeyAction::Search,
             Action::SelectAll | Action::ResetTerm | Action::Quit | Action::About => return None,
         })
     }
@@ -74,6 +78,7 @@ pub const MENUS: [(&str, &[MenuItem]); 4] = [
             item("Paste", Action::Paste),
             item("Paste Selection", Action::PastePrimary),
             item("Select All", Action::SelectAll),
+            item("Find", Action::Find),
             SEP,
             item("Preferences", Action::Settings),
         ],
@@ -523,6 +528,47 @@ impl Renderer {
                 self.push_text(fgs, &s, g.x + g.w - cw - sw, ty, mix(base, fg, 0.55));
             }
             ry += g.item_h;
+        }
+    }
+}
+
+impl Renderer {
+    pub(super) fn push_search_bar(&mut self, fgs: &mut Vec<Instance>, s: &Search, pal: &Palette, thick: f32) {
+        let (cw, ch, pad) = (self.cell_w, self.cell_h, self.pad);
+        let (base, fg) = (pal.bg, pal.fg);
+        let muted = mix(base, fg, 0.55);
+        let count = match (s.current, s.matches.len()) {
+            _ if s.query.is_empty() => String::new(),
+            (_, 0) => "No matches".to_string(),
+            (cur, n) => {
+                let plus = if s.capped() { "+" } else { "" };
+                format!("{}/{n}{plus}", cur.map_or(0, |i| i + 1))
+            }
+        };
+        let label = "Find";
+        let label_w = label.chars().count() as f32 * cw;
+        let count_w = count.chars().count().max(5) as f32 * cw;
+        let avail = self.config.width as f32 - 2.0 * pad;
+        let w = (cw * 44.0).min(avail).max(label_w + count_w + cw * 6.0);
+        let h = (ch * 1.6).round();
+        let x = (self.config.width as f32 - pad - w).max(0.0).round();
+        let y = (self.top_inset() + pad).round();
+        fgs.push(Instance::rect(x, y, w, h, mix(base, fg, 0.07)));
+        super::outline(fgs, x, y, w, h, thick, mix(base, fg, 0.35));
+        let ty = y + (h - ch) / 2.0;
+        self.push_text(fgs, label, x + cw, ty, muted);
+        let field_x = x + cw * 2.0 + label_w;
+        let field_w = (x + w - cw * 2.0 - count_w - field_x).max(cw);
+        let fits = ((field_w / cw).floor() as usize).saturating_sub(1).max(1);
+        let n = s.query.chars().count();
+        let shown: String = s.query.chars().skip(n.saturating_sub(fits)).collect();
+        self.push_text(fgs, &shown, field_x, ty, fg);
+        let caret_x = (field_x + shown.chars().count() as f32 * cw).round();
+        fgs.push(Instance::rect(caret_x, ty, thick * 2.0, ch, fg));
+        if !count.is_empty() {
+            let color = if s.matches.is_empty() { pal.ansi[1] } else { muted };
+            let cx = x + w - cw - count.chars().count() as f32 * cw;
+            self.push_text(fgs, &count, cx, ty, color);
         }
     }
 }
