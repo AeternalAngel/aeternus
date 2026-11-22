@@ -3029,10 +3029,10 @@ mod tests {
         assert_eq!(t.replies, b"\x1bP0+r\x1b\\\x1bP0+r\x1b\\");
     }
     #[test]
-    fn xtgettcap_with_8bit_st_and_lowercase_hex() {
+    fn xtgettcap_lowercase_hex() {
         let mut t = Term::new(20, 4);
         let mut p = crate::parser::Parser::new();
-        p.advance(&mut t, b"\x1bP+q544e\x9c");
+        p.advance(&mut t, b"\x1bP+q544e\x1b\\");
         assert_eq!(tcap_value(&String::from_utf8(t.replies.clone()).unwrap()).unwrap(), b"xterm-aeternus");
     }
     fn decrqss(t: &mut Term, pt: &str) -> String {
@@ -3080,10 +3080,15 @@ mod tests {
         for pt in ["\"p", "s", "t", "", "mm"] {
             assert_eq!(decrqss(&mut t, pt), "\x1bP0$r\x1b\\", "{pt:?}");
         }
-        t.replies.clear();
-        let mut p = crate::parser::Parser::new();
-        p.advance(&mut t, b"\x1bP$qr\x9c");
-        assert_eq!(t.replies, b"\x1bP1$r1;4r\x1b\\");
+    }
+    #[test]
+    fn utf8_continuation_byte_9c_does_not_end_strings() {
+        let mut t = Term::new(10, 1);
+        feed(&mut t, "\x1b]2;aⓜb\x07ok");
+        assert_eq!(t.title, "aⓜb");
+        assert_eq!(row_text(&t, 0), "ok        ");
+        feed(&mut t, "\x1b]2;cⓜd\x1b\\");
+        assert_eq!(t.title, "cⓜd");
     }
     #[test]
     fn unknown_dcs_is_ignored() {

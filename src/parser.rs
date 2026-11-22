@@ -16,7 +16,6 @@ const OSC_MAX: usize = 4096;
 const OSC52_MAX: usize = 4 * ((1 << 20) + 2) / 3 + 64;
 pub const DCS_MAX: usize = 4096;
 pub const APC_MAX: usize = 8192;
-const ST_8BIT: u8 = 0x9C;
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum State {
     Ground,
@@ -282,13 +281,13 @@ impl Parser {
                 self.state = State::DcsPass;
             }
             0x1B => self.enter_escape(),
-            0x18 | 0x1A | ST_8BIT => self.state = State::Ground,
+            0x18 | 0x1A => self.state = State::Ground,
             _ => {}
         }
     }
     fn string_data<P: Perform>(&mut self, p: &mut P, b: u8) {
         match b {
-            0x1B | ST_8BIT => {
+            0x1B => {
                 if !self.data_overflow {
                     if self.state == State::Apc {
                         p.apc(&self.data);
@@ -296,11 +295,7 @@ impl Parser {
                         p.dcs(&self.params, &self.inter, self.private, self.dcs_action, &self.data);
                     }
                 }
-                if b == 0x1B {
-                    self.enter_escape();
-                } else {
-                    self.state = State::Ground;
-                }
+                self.enter_escape();
             }
             0x18 | 0x1A => self.state = State::Ground,
             _ => {
@@ -315,14 +310,14 @@ impl Parser {
     }
     fn str_ignore(&mut self, b: u8) {
         match b {
-            0x18 | 0x1A | ST_8BIT => self.state = State::Ground,
+            0x18 | 0x1A => self.state = State::Ground,
             0x1B => self.enter_escape(),
             _ => {}
         }
     }
     fn ignore(&mut self, b: u8) {
         match b {
-            0x07 | 0x18 | 0x1A | ST_8BIT => self.state = State::Ground,
+            0x07 | 0x18 | 0x1A => self.state = State::Ground,
             0x1B => self.enter_escape(),
             _ => {}
         }
@@ -372,11 +367,11 @@ mod tests {
         assert_eq!(r.text, "ok");
     }
     #[test]
-    fn dcs_with_8bit_st() {
-        let r = run(b"\x1bP$qm\x9cok");
-        assert_eq!(r.dcs, vec![(vec![], b"$".to_vec(), None, b'q', b"m".to_vec())]);
-        assert_eq!(r.text, "ok");
-        assert!(r.esc.is_empty());
+    fn bare_9c_is_payload_not_st() {
+        let r = run(b"\x1bP$qm\x9cok\x1b\\");
+        assert_eq!(r.dcs, vec![(vec![], b"$".to_vec(), None, b'q', b"m\x9cok".to_vec())]);
+        assert!(r.text.is_empty());
+        assert_eq!(r.esc, b"\\");
     }
     #[test]
     fn dcs_collects_params_private_and_final() {
@@ -432,14 +427,22 @@ mod tests {
         assert_eq!(r.text, "ok");
         let mut input = b"\x1b_G".to_vec();
         input.extend(std::iter::repeat_n(b'A', APC_MAX + 1));
-        input.extend(b"\x9cok");
+        input.extend(b"\x1b\\ok");
         let r = run(&input);
         assert!(r.apc.is_empty());
         assert_eq!(r.text, "ok");
     }
     #[test]
+    fn utf8_in_dcs_and_apc_arrives_whole() {
+        let r = run("\x1bP+qaⓜb\x1b\\\x1b_Gaⓜb\x1b\\ok".as_bytes());
+        assert_eq!(r.dcs.len(), 1);
+        assert_eq!(r.dcs[0].4, "aⓜb".as_bytes());
+        assert_eq!(r.apc, vec!["Gaⓜb".as_bytes().to_vec()]);
+        assert_eq!(r.text, "ok");
+    }
+    #[test]
     fn sos_and_pm_are_ignored() {
-        let r = run(b"\x1bXhidden\x1b\\\x1b^hidden\x9cok");
+        let r = run(b"\x1bXhid\x9cden\x1b\\\x1b^hidden\x1b\\ok");
         assert!(r.dcs.is_empty() && r.apc.is_empty());
         assert_eq!(r.text, "ok");
     }
