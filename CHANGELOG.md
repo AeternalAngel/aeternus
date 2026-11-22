@@ -6,6 +6,8 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+## [1.6-pre1] - 2026-11-22
+
 ### Added
 
 - Inline images with the kitty graphics protocol: images sent directly in the escape code (`t=d`), whole or in chunks, optionally compressed with zlib (`o=z`), as 24-bit RGB, 32-bit RGBA or PNG. Programs can transmit, display, place (`a=p`), delete (`a=d`, by id, number, placement, cursor, cell, row, column, z-index or id range) and query (`a=q`) images, with source rectangles, a size in cells, pixel offsets inside the first cell, z-index (below the cell backgrounds, below the text or above it) and `C=1` to keep the cursor in place. Replies follow the protocol and respect `q=1` and `q=2`. Images scroll with the text, stay in the scrollback until their lines leave it, follow reflow, zoom and scale changes, and each screen has its own images. Reading files, temporary files or shared memory (`t=f`, `t=t`, `t=s`), animation, Unicode placeholders and relative placements are not supported yet and are answered with an error. Works with `kitten icat`, `chafa -f kitty` and yazi's previews.
@@ -187,7 +189,8 @@ All notable changes to this project are documented here. The format is based on
 
 Initial Windows support.
 
-[Unreleased]: https://github.com/AeternalAngel/aeternus/compare/v1.5.0...HEAD
+[Unreleased]: https://github.com/AeternalAngel/aeternus/compare/v1.6.0-pre1...HEAD
+[1.6-pre1]: https://github.com/AeternalAngel/aeternus/compare/v1.5.0...v1.6.0-pre1
 [1.5]: https://github.com/AeternalAngel/aeternus/compare/v1.4.2...v1.5.0
 [1.4.2]: https://github.com/AeternalAngel/aeternus/compare/v1.4.1...v1.4.2
 [1.4.1]: https://github.com/AeternalAngel/aeternus/compare/v1.4.0...v1.4.1

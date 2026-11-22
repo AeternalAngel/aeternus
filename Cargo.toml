@@ -1,7 +1,7 @@
 [package]
 name = "aeternus"
 description = "A GPU-accelerated terminal emulator for Linux written in Rust"
-version = "1.5.0"
+version = "1.6.0-pre1"
 authors = ["Gabriel (AeternalAngel)"]
 edition = "2021"
 rust-version = "1.90"
