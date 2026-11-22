@@ -21,7 +21,7 @@
 - **Background transparency** (`window.opacity`), with solid text.
 - **Text:** truecolor, 256 colors, bold/italic/strikethrough/blink, underline styles (double, curly, dotted, dashed) and colors, wide (CJK) characters, color emoji, combining accents, skin-tone modifiers and ZWJ emoji sequences, DEC line drawing.
 - **Links:** `Ctrl+click` opens URLs and OSC 8 hyperlinks.
-- **Compatibility:** alternate screen, bracketed paste, mouse reporting (1000/1002/1003/SGR), focus events, synchronized output (2026), XTGETTCAP, DECRQSS, kitty keyboard protocol (disambiguate level), cursor shapes, mouse pointer shapes (OSC 22), OSC 4/7/8/10/11/12/52, tab stops, insert/origin modes and more.
+- **Compatibility:** alternate screen, bracketed paste, mouse reporting (1000/1002/1003/SGR), focus events, synchronized output (2026), XTGETTCAP, DECRQSS, kitty keyboard protocol (disambiguate level), cursor shapes, mouse pointer shapes (OSC 22), OSC 4/7/8/10/11/12/52, tab stops, insert/origin modes, inline images (kitty graphics protocol and sixel) and more.
 - **Terminfo:** ships an `xterm-aeternus` entry that declares styled and colored underlines, synchronized output and truecolor, with a fallback to `xterm-256color` when it isn't installed.
 - **Shell integration:** prompt marks (OSC 133) to jump between prompts and select a command's output.
 - **Desktop notifications** from programs (OSC 9, 99 and 777).
@@ -193,6 +193,12 @@ PS0=$'\e]133;C\a'
 
 Programs can show desktop notifications with OSC 9, OSC 777 (`notify;title;body`) or kitty's OSC 99. They are shown with `notify-send` (from libnotify), and `notifications = false` in `[terminal]` turns them off.
 
+## Images
+
+Programs can show images with the kitty graphics protocol or with sixel, for example `kitten icat photo.png`, `chafa -f kitty photo.png`, `chafa -f sixel photo.png` or the image previews in yazi. Images scroll with the text and stay in the scrollback. Each tab keeps at most 256 MB of decoded images, dropping the oldest ones first. `images = false` in `[terminal]` turns both protocols off.
+
+From the kitty protocol, images must be sent inside the escape code (`t=d`); reading files or shared memory, animation, Unicode placeholders and relative placements are not supported yet.
+
 ## Terminfo
 
 Aeternus ships an `xterm-aeternus` terminfo entry, based on `xterm-256color`, that also declares styled and colored underlines (`Smulx`, `Setulc`), synchronized output (`Sync`) and truecolor (`Tc`), so programs like tmux and Neovim can use them. The packages and `install.sh` install it, and the shell gets `TERM=xterm-aeternus` whenever the entry is found; otherwise it falls back to `TERM=xterm-256color`. Set `term` in `[terminal]` to force a value.
@@ -227,7 +233,7 @@ aet reload    # reload config.toml
 
 ## Not supported yet
 
-Splits, inline images (sixel / kitty graphics), IME composition (pre-edit) for CJK input, regional-indicator flag emoji, the full kitty keyboard protocol (only the first level), OSC 52 clipboard reading.
+Splits, kitty graphics animation, Unicode placeholders and file transfer, IME composition (pre-edit) for CJK input, regional-indicator flag emoji, the full kitty keyboard protocol (only the first level), OSC 52 clipboard reading.
 
 ## Contributing
 

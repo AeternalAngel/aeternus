@@ -31,6 +31,7 @@ pub const TEMPLATE: &str = r##"# Aeternus configuration
 # osc52 = true          # let programs write to the clipboard through OSC 52
 # smart_copy_paste = false  # Ctrl+C copies when there is a selection, Ctrl+V pastes
 # notifications = true  # let programs show desktop notifications (OSC 9, 99 and 777)
+# images = true         # inline images from programs (kitty graphics protocol and sixel)
 # term = ""             # TERM for the shell; empty = xterm-aeternus when installed, else xterm-256color
 
 [cursor]
@@ -172,6 +173,7 @@ pub struct TerminalConfig {
     pub osc52: bool,
     pub smart_copy_paste: bool,
     pub notifications: bool,
+    pub images: bool,
     pub term: String,
 }
 impl Default for TerminalConfig {
@@ -183,6 +185,7 @@ impl Default for TerminalConfig {
             osc52: true,
             smart_copy_paste: false,
             notifications: true,
+            images: true,
             term: String::new(),
         }
     }

@@ -6,6 +6,17 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+### Added
+
+- Inline images with the kitty graphics protocol: images sent directly in the escape code (`t=d`), whole or in chunks, optionally compressed with zlib (`o=z`), as 24-bit RGB, 32-bit RGBA or PNG. Programs can transmit, display, place (`a=p`), delete (`a=d`, by id, number, placement, cursor, cell, row, column, z-index or id range) and query (`a=q`) images, with source rectangles, a size in cells, pixel offsets inside the first cell, z-index (below the cell backgrounds, below the text or above it) and `C=1` to keep the cursor in place. Replies follow the protocol and respect `q=1` and `q=2`. Images scroll with the text, stay in the scrollback until their lines leave it, follow reflow, zoom and scale changes, and each screen has its own images. Reading files, temporary files or shared memory (`t=f`, `t=t`, `t=s`), animation, Unicode placeholders and relative placements are not supported yet and are answered with an error. Works with `kitten icat`, `chafa -f kitty` and yazi's previews.
+- Sixel images (`DCS q`): RGB and HLS color registers, repeats, the pixel aspect ratio and transparent backgrounds (`P2=1`). Sixel data is decoded as it arrives, so images are not limited by the size of other DCS strings. Each image has its own 1024 color registers, like xterm's default. Images are drawn at the cursor, which moves below them, scrolling the screen as needed; with DECSDM (`CSI ? 80 h`) they are drawn at the top left without scrolling. As in xterm, text written or erased over a sixel image removes that part of the image. DA1 now reports sixel support (`4`) and XTSMGRAPHICS (`CSI ? Pi ; Pa ; Pv S`) reports the number of color registers and the maximum image size.
+- The new `terminal.images` option (on by default) turns off both image protocols. When off, the terminal does not answer kitty graphics queries and does not report sixel support.
+- Images use at most 256 MB of decoded pixels per tab; the oldest images are dropped when the limit is reached, and images larger than 10000×10000 pixels are refused. Selection, search matches and the cursor stay visible over images, and images keep their own transparency with `window.opacity`.
+
+### Fixed
+
+- Programs were not told about a new cell size in pixels when the scale factor or the zoom changed without changing the number of rows and columns, so tools that size images from the terminal's pixel size used the old one.
+
 ## [1.5] - 2026-11-21
 
 ### Added

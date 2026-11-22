@@ -12,8 +12,9 @@ aeternus \- GPU-accelerated terminal emulator
 is a terminal emulator for Linux rendered on the GPU with wgpu. It runs on Wayland and X11,
 supports tabs, truecolor, wide characters, color emoji, combining marks, OSC 8 hyperlinks,
 clickable URLs, shell integration (OSC 133), desktop notifications (OSC 9, 99 and 777, shown with
-.BR notify-send (1))
-and an optional cursor trail animation.
+.BR notify-send (1)),
+inline images (kitty graphics protocol and sixel; \fBimages = false\fR in \fB[terminal]\fR turns
+them off) and an optional cursor trail animation.
 .SH OPTIONS
 .TP
 .BR \-c ", " \-\-config " " \fIpath\fR

@@ -252,6 +252,7 @@ pub struct Term {
     image_quota: usize,
     sixel: Option<Box<crate::sixel::Decoder>>,
     sixel_display_mode: bool,
+    images: bool,
 }
 fn default_tabs(cols: usize) -> Vec<bool> {
     (0..cols).map(|c| c > 0 && c % 8 == 0).collect()
@@ -326,6 +327,7 @@ impl Term {
             image_quota: QUOTA,
             sixel: None,
             sixel_display_mode: false,
+            images: true,
         }
     }
     pub fn apply_config(&mut self, cfg: &Config) {
@@ -335,6 +337,7 @@ impl Term {
         self.max_scrollback = cfg.terminal.scrollback;
         self.trim_scrollback();
         self.osc52 = cfg.terminal.osc52;
+        self.set_images(cfg.terminal.images);
         self.default_cursor_shape = cfg.cursor.shape;
         self.default_cursor_blink = cfg.cursor.blink;
         self.cursor_shape = cfg.cursor.shape;
@@ -347,6 +350,20 @@ impl Term {
         }
         self.display_offset = self.display_offset.min(self.scrollback.len());
         self.graphics.prune_above(self.popped as isize);
+    }
+    fn set_images(&mut self, on: bool) {
+        self.images = on;
+        if !on {
+            self.graphics.clear();
+            if let Some(g) = &mut self.saved_graphics {
+                g.clear();
+            }
+            self.kitty_pending = None;
+            self.sixel = None;
+        }
+    }
+    fn device_attributes(&mut self) {
+        self.reply(if self.images { "\x1b[?62;4;22c" } else { "\x1b[?62;22c" });
     }
     fn screen_base(&self) -> isize {
         (self.popped + self.scrollback.len()) as isize
@@ -976,6 +993,7 @@ impl Term {
         let osc52 = self.osc52;
         let cell_px = self.cell_px;
         let image_quota = self.image_quota;
+        let images = self.images;
         let palette_ansi = std::mem::replace(&mut self.palette_ansi, Box::new([[0; 3]; 256]));
         *self = Term::new(c, r);
         self.osc52 = osc52;
@@ -992,6 +1010,7 @@ impl Term {
         self.max_scrollback = max_sb;
         self.cell_px = cell_px;
         self.image_quota = image_quota;
+        self.images = images;
         self.palette_ansi = palette_ansi;
     }
     fn erase_display(&mut self, mode: u16) {
@@ -2292,7 +2311,7 @@ impl Perform for Term {
             }
             (None, b's') => self.save_cursor(),
             (None, b'u') => self.restore_cursor(),
-            (None, b'c') if first == 0 => self.reply("\x1b[?62;4;22c"),
+            (None, b'c') if first == 0 => self.device_attributes(),
             (None, b'n') => match first {
                 5 => self.reply("\x1b[0n"),
                 6 => {
@@ -2341,7 +2360,7 @@ impl Perform for Term {
                 b'M' => self.reverse_index(),
                 b'=' => self.app_keypad = true,
                 b'>' => self.app_keypad = false,
-                b'Z' => self.reply("\x1b[?62;4;22c"),
+                b'Z' => self.device_attributes(),
                 b'c' => self.reset(),
                 b'n' => self.gl = 0,
                 _ => {}
@@ -2360,10 +2379,12 @@ impl Perform for Term {
         }
     }
     fn apc(&mut self, data: &[u8]) {
-        self.kitty_apc(data);
+        if self.images {
+            self.kitty_apc(data);
+        }
     }
     fn dcs_hook(&mut self, params: &[u16], inter: &[u8], private: Option<u8>, action: u8) -> bool {
-        if action != b'q' || !inter.is_empty() || private.is_some() {
+        if !self.images || action != b'q' || !inter.is_empty() || private.is_some() {
             return false;
         }
         self.sixel_start(params);

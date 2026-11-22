@@ -65,6 +65,7 @@ impl Term {
         let pa = params.get(1).copied().unwrap_or(0);
         let max = MAX_SIZE as usize;
         let (ps, pv) = match (pi, pa) {
+            (1 | 2, _) if !self.images => (3, "0".to_string()),
             (1, 1..=4) => (0, REGISTERS.to_string()),
             (2, 1 | 2) => {
                 let w = (self.cols() * self.cell_px.0 as usize).min(max);
@@ -240,6 +241,33 @@ mod tests {
         assert_eq!(feed(&mut t, b"\x1b[?2;3;100;100S"), "\x1b[?2;3;0S");
         assert_eq!(feed(&mut t, b"\x1b[?3;1;0S"), "\x1b[?3;1;0S");
         assert_eq!(feed(&mut t, b"\x1b[?1;9;0S"), "\x1b[?1;2;0S");
+    }
+
+    #[test]
+    fn images_can_be_turned_off() {
+        let mut t = term();
+        feed(&mut t, &sixel(10, 2));
+        feed(&mut t, b"\x1b[?1049h");
+        feed(&mut t, b"\x1b_Ga=T,f=24,s=1,v=1,i=1;AAAA\x1b\\");
+        let mut cfg = crate::config::Config::default();
+        cfg.terminal.images = false;
+        t.apply_config(&cfg);
+        assert!(t.graphics.is_empty());
+        feed(&mut t, b"\x1b[?1049l");
+        assert!(t.graphics.is_empty());
+        assert_eq!(feed(&mut t, b"\x1b_Gi=31,s=1,v=1,a=q,t=d,f=24;AAAA\x1b\\\x1b[c"), "\x1b[?62;22c");
+        assert_eq!(feed(&mut t, b"\x1bZ"), "\x1b[?62;22c");
+        assert_eq!(feed(&mut t, b"\x1b[?1;1;0S"), "\x1b[?1;3;0S");
+        feed(&mut t, &sixel(10, 2));
+        assert!(t.graphics.is_empty());
+        feed(&mut t, b"\x1bc");
+        assert_eq!(feed(&mut t, b"\x1b[c"), "\x1b[?62;22c");
+        cfg.terminal.images = true;
+        t.apply_config(&cfg);
+        assert_eq!(
+            feed(&mut t, b"\x1b_Gi=31,s=1,v=1,a=q,t=d,f=24;AAAA\x1b\\\x1b[c"),
+            "\x1b_Gi=31;OK\x1b\\\x1b[?62;4;22c"
+        );
     }
 
     #[test]
