@@ -55,6 +55,11 @@
   </supports>
   <content_rating type="oars-1.1" />
   <releases>
+    <release version="1.5.0" date="2026-11-21">
+      <description>
+        <p>Scrollback search, underline styles and colors, blinking text, an xterm-aeternus terminfo entry, shell integration, desktop notifications, mouse pointer shapes and XTGETTCAP/DECRQSS replies.</p>
+      </description>
+    </release>
     <release version="1.4.0" date="2026-11-15">
       <description>
         <p>Tabs, menu bar, preferences panel, cursor trail, hyperlinks and many compatibility fixes.</p>

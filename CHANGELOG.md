@@ -6,6 +6,8 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+## [1.5] - 2026-11-21
+
 ### Added
 
 - Scrollback search: `Ctrl+Shift+F` or Edit > Find opens a search bar in the top right corner. Matches in the history and on screen are highlighted as you type, and the bar shows the selected match and the total (for example `3/17`). `Enter` or `Up` goes to the previous (older) match, `Shift+Enter` or `Down` to the next, `Ctrl+Backspace` clears the query and `Esc` closes the bar. Matches can continue across wrapped lines, and the search ignores case unless the query has an uppercase letter. On the alternate screen only the visible screen is searched. The shortcut is the new `search` keybinding.
@@ -170,7 +172,8 @@ All notable changes to this project are documented here. The format is based on
 
 Initial Windows support.
 
-[Unreleased]: https://github.com/AeternalAngel/aeternus/compare/v1.4.2...HEAD
+[Unreleased]: https://github.com/AeternalAngel/aeternus/compare/v1.5.0...HEAD
+[1.5]: https://github.com/AeternalAngel/aeternus/compare/v1.4.2...v1.5.0
 [1.4.2]: https://github.com/AeternalAngel/aeternus/compare/v1.4.1...v1.4.2
 [1.4.1]: https://github.com/AeternalAngel/aeternus/compare/v1.4.0...v1.4.1
 [1.4]: https://github.com/AeternalAngel/aeternus/compare/v1.3.0...v1.4.0-pre1
