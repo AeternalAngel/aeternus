@@ -180,7 +180,7 @@ impl Term {
                 }
                 if !p.failed {
                     match base64_decode(payload) {
-                        Some(d) if p.data.len() + d.len() <= QUOTA => p.data.extend_from_slice(&d),
+                        Some(d) if p.data.len() + d.len() <= self.image_quota => p.data.extend_from_slice(&d),
                         Some(_) => {
                             self.kitty_fail(&p.cmd, "EFBIG:Image too large");
                             p.failed = true;
@@ -359,7 +359,7 @@ impl Term {
 
 #[cfg(test)]
 mod tests {
-    use crate::graphics::{Origin, QUOTA};
+    use crate::graphics::Origin;
     use crate::parser::Parser;
     use crate::term::Term;
 
@@ -739,38 +739,46 @@ mod tests {
     }
 
     #[test]
-    fn quota_evicts_oldest() {
+    fn quota_evicts_unplaced_then_oldest() {
         let mut t = term();
-        let side = 4096u32;
-        let n = (QUOTA / (side as usize * side as usize * 4)) as u32;
-        let raw =
-            miniz_oxide::deflate::compress_to_vec_zlib(&vec![0u8; side as usize * side as usize * 4], 1);
-        let enc = b64(&raw);
-        for i in 1..=n + 1 {
-            feed_chunked(
-                &mut t,
-                format!("\x1b_Ga=t,f=32,s={side},v={side},o=z,i={i};{enc}\x1b\\").as_bytes(),
-            );
+        t.image_quota = 4 * 16 * 16 * 4;
+        let img = |i: u32| apc(&format!("a=t,f=24,s=16,v=16,i={i}"), &[0; 16 * 16 * 3]);
+        for i in 1..=4 {
+            assert_eq!(feed(&mut t, &img(i)), format!("\x1b_Gi={i};OK\x1b\\"));
         }
-        assert!(t.graphics.bytes() <= QUOTA);
-        assert!(t.graphics.by_id(1).is_none());
-        assert!(t.graphics.by_id(n + 1).is_some());
+        feed(&mut t, b"\x1b_Ga=p,i=1,C=1\x1b\\");
+        feed(&mut t, &img(5));
+        assert!(t.graphics.by_id(1).is_some());
+        assert!(t.graphics.by_id(2).is_none());
+        feed(&mut t, &img(6));
+        assert!(t.graphics.by_id(3).is_none());
+        assert_eq!(t.graphics.bytes(), t.image_quota);
+        let big = apc("a=t,f=24,s=32,v=33,i=9", &[0; 32 * 33 * 3]);
+        assert!(t.graphics.by_id(9).is_none());
+        assert_eq!(feed(&mut t, &big), "\x1b_Gi=9;ENOSPC:Image storage is full\x1b\\");
     }
 
-    fn feed_chunked(t: &mut Term, cmd: &[u8]) {
-        let semi = cmd.iter().position(|&b| b == b';').unwrap();
-        let ctrl = std::str::from_utf8(&cmd[3..semi]).unwrap().to_string();
-        let data = &cmd[semi + 1..cmd.len() - 2];
-        let chunks: Vec<&[u8]> = data.chunks(4096).collect();
-        let mut out = Vec::new();
-        for (i, c) in chunks.iter().enumerate() {
-            let m = u8::from(i + 1 < chunks.len());
-            let head = if i == 0 { format!("{ctrl},m={m}") } else { format!("m={m}") };
-            out.extend_from_slice(format!("\x1b_G{head};").as_bytes());
-            out.extend_from_slice(c);
-            out.extend_from_slice(b"\x1b\\");
-        }
-        let r = feed(t, &out);
-        assert!(r.ends_with("OK\x1b\\"), "{r}");
+    #[test]
+    fn quota_is_shared_with_the_other_screen() {
+        let mut t = term();
+        t.image_quota = 2 * 16 * 16 * 4;
+        let img = |i: u32| apc(&format!("a=T,f=24,s=16,v=16,i={i},C=1"), &[0; 16 * 16 * 3]);
+        feed(&mut t, &img(1));
+        feed(&mut t, &img(2));
+        feed(&mut t, b"\x1b[?1049h");
+        feed(&mut t, &img(3));
+        assert_eq!(t.graphics.bytes() + t.saved_graphics.as_ref().unwrap().bytes(), t.image_quota);
+        feed(&mut t, b"\x1b[?1049l");
+        assert!(t.graphics.by_id(1).is_none());
+        assert!(t.graphics.by_id(2).is_some());
+    }
+
+    #[test]
+    fn chunked_upload_respects_the_quota() {
+        let mut t = term();
+        t.image_quota = 16;
+        let r = feed(&mut t, b"\x1b_Ga=t,f=32,s=4,v=4,i=1,m=1;AAAAAAAAAAAAAAAA\x1b\\\x1b_Gm=1;AAAAAAAA\x1b\\\x1b_Gm=0;AAAA\x1b\\");
+        assert_eq!(r, "\x1b_Gi=1;EFBIG:Image too large\x1b\\");
+        assert!(t.graphics.is_empty());
     }
 }

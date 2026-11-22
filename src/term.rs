@@ -248,6 +248,7 @@ pub struct Term {
     pub graphics: Graphics,
     saved_graphics: Option<Graphics>,
     kitty_pending: Option<kitty::Pending>,
+    image_quota: usize,
 }
 fn default_tabs(cols: usize) -> Vec<bool> {
     (0..cols).map(|c| c > 0 && c % 8 == 0).collect()
@@ -319,6 +320,7 @@ impl Term {
             graphics: Graphics::default(),
             saved_graphics: None,
             kitty_pending: None,
+            image_quota: QUOTA,
         }
     }
     pub fn apply_config(&mut self, cfg: &Config) {
@@ -349,12 +351,12 @@ impl Term {
         self.graphics.shift(base, top, bottom, up);
     }
     fn make_room(&mut self, need: usize) -> bool {
-        if need > QUOTA {
+        if need > self.image_quota {
             return false;
         }
         loop {
             let used = self.graphics.bytes() + self.saved_graphics.as_ref().map_or(0, Graphics::bytes);
-            if used + need <= QUOTA {
+            if used + need <= self.image_quota {
                 return true;
             }
             let freed = self
@@ -959,6 +961,7 @@ impl Term {
         let max_sb = self.max_scrollback;
         let osc52 = self.osc52;
         let cell_px = self.cell_px;
+        let image_quota = self.image_quota;
         let palette_ansi = std::mem::replace(&mut self.palette_ansi, Box::new([[0; 3]; 256]));
         *self = Term::new(c, r);
         self.osc52 = osc52;
@@ -974,6 +977,7 @@ impl Term {
         self.cursor_blink = blink;
         self.max_scrollback = max_sb;
         self.cell_px = cell_px;
+        self.image_quota = image_quota;
         self.palette_ansi = palette_ansi;
     }
     fn erase_display(&mut self, mode: u16) {
