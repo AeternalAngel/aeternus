@@ -21,7 +21,7 @@
 - **Background transparency** (`window.opacity`), with solid text.
 - **Text:** truecolor, 256 colors, bold/italic/strikethrough/blink, underline styles (double, curly, dotted, dashed) and colors, wide (CJK) characters, color emoji, combining accents, skin-tone modifiers and ZWJ emoji sequences, DEC line drawing.
 - **Links:** `Ctrl+click` opens URLs and OSC 8 hyperlinks.
-- **Compatibility:** alternate screen, bracketed paste, mouse reporting (1000/1002/1003/SGR), focus events, synchronized output (2026), XTGETTCAP, kitty keyboard protocol (disambiguate level), cursor shapes, mouse pointer shapes (OSC 22), OSC 4/7/8/10/11/12/52, tab stops, insert/origin modes and more.
+- **Compatibility:** alternate screen, bracketed paste, mouse reporting (1000/1002/1003/SGR), focus events, synchronized output (2026), XTGETTCAP, DECRQSS, kitty keyboard protocol (disambiguate level), cursor shapes, mouse pointer shapes (OSC 22), OSC 4/7/8/10/11/12/52, tab stops, insert/origin modes and more.
 - **Shell integration:** prompt marks (OSC 133) to jump between prompts and select a command's output.
 - **Desktop notifications** from programs (OSC 9, 99 and 777).
 - **Daily use:** 10k-line scrollback with reflow on resize and search, word/line selection, clipboard and primary selection, zoom, fullscreen, visual bell.

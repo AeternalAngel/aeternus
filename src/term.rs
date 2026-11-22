@@ -1355,6 +1355,65 @@ impl Term {
             self.reply(&s);
         }
     }
+    fn decrqss(&mut self, data: &[u8]) {
+        let value = match data {
+            b"m" => Some(format!("{}m", self.sgr_state())),
+            b"r" => Some(format!("{};{}r", self.scroll_top + 1, self.scroll_bottom + 1)),
+            b" q" => {
+                let base = match self.cursor_shape {
+                    CursorShape::Block => 1,
+                    CursorShape::Underline => 3,
+                    CursorShape::Bar => 5,
+                };
+                Some(format!("{} q", base + u8::from(!self.cursor_blink)))
+            }
+            _ => None,
+        };
+        let s = match value {
+            Some(v) => format!("\x1bP1$r{v}\x1b\\"),
+            None => "\x1bP0$r\x1b\\".to_string(),
+        };
+        self.reply(&s);
+    }
+    fn sgr_state(&self) -> String {
+        let f = self.pen.flags;
+        let mut parts = vec!["0".to_string()];
+        for (flag, code) in [(flags::BOLD, "1"), (flags::DIM, "2"), (flags::ITALIC, "3")] {
+            if f & flag != 0 {
+                parts.push(code.into());
+            }
+        }
+        if f & flags::UNDERLINE != 0 {
+            parts.push(
+                match f & flags::UNDERLINE_STYLE {
+                    flags::UNDERLINE_DOUBLE => "4:2",
+                    flags::UNDERLINE_CURLY => "4:3",
+                    flags::UNDERLINE_DOTTED => "4:4",
+                    flags::UNDERLINE_DASHED => "4:5",
+                    _ => "4",
+                }
+                .into(),
+            );
+        }
+        for (flag, code) in
+            [(flags::BLINK, "5"), (flags::INVERSE, "7"), (flags::HIDDEN, "8"), (flags::STRIKE, "9")]
+        {
+            if f & flag != 0 {
+                parts.push(code.into());
+            }
+        }
+        let color = |c: Color, base: u8, bright: u8, ext: u8| match c {
+            Color::Default => None,
+            Color::Indexed(i) if i < 8 && base > 0 => Some(format!("{}", base + i)),
+            Color::Indexed(i) if i < 16 && base > 0 => Some(format!("{}", bright + i - 8)),
+            Color::Indexed(i) => Some(format!("{ext}:5:{i}")),
+            Color::Rgb(r, g, b) => Some(format!("{ext}:2::{r}:{g}:{b}")),
+        };
+        parts.extend(color(self.pen.fg, 30, 90, 38));
+        parts.extend(color(self.pen.bg, 40, 100, 48));
+        parts.extend(color(decode_color(self.extras.get(self.pen.extra).2), 0, 0, 58));
+        parts.join(";")
+    }
     fn shell_mark(&mut self, rest: &[u8]) {
         let mark = match rest.first() {
             Some(b'A' | b'P' | b'N') => PROMPT_MARK,
@@ -2156,8 +2215,10 @@ impl Perform for Term {
         }
     }
     fn dcs(&mut self, _params: &[u16], inter: &[u8], private: Option<u8>, action: u8, data: &[u8]) {
-        if let (None, [b'+'], b'q') = (private, inter, action) {
-            self.xtgettcap(data);
+        match (private, inter, action) {
+            (None, [b'+'], b'q') => self.xtgettcap(data),
+            (None, [b'$'], b'q') => self.decrqss(data),
+            _ => {}
         }
     }
     fn osc(&mut self, data: &[u8]) {
@@ -2973,6 +3034,56 @@ mod tests {
         let mut p = crate::parser::Parser::new();
         p.advance(&mut t, b"\x1bP+q544e\x9c");
         assert_eq!(tcap_value(&String::from_utf8(t.replies.clone()).unwrap()).unwrap(), b"xterm-aeternus");
+    }
+    fn decrqss(t: &mut Term, pt: &str) -> String {
+        t.replies.clear();
+        feed(t, &format!("\x1bP$q{pt}\x1b\\"));
+        String::from_utf8(std::mem::take(&mut t.replies)).unwrap()
+    }
+    #[test]
+    fn decrqss_sgr() {
+        let mut t = Term::new(20, 4);
+        assert_eq!(decrqss(&mut t, "m"), "\x1bP1$r0m\x1b\\");
+        feed(&mut t, "\x1b[0m\x1b[48;2;1;2;3m");
+        assert_eq!(decrqss(&mut t, "m"), "\x1bP1$r0;48:2::1:2:3m\x1b\\");
+        feed(&mut t, "\x1b[0;1;3;4:3;5;7;9;31;102;58;5;200m");
+        assert_eq!(decrqss(&mut t, "m"), "\x1bP1$r0;1;3;4:3;5;7;9;31;102;58:5:200m\x1b\\");
+        feed(&mut t, "\x1b[0;2;8;21;38;5;123;48;5;4;58:2::10:20:30m");
+        assert_eq!(decrqss(&mut t, "m"), "\x1bP1$r0;2;4:2;8;38:5:123;44;58:2::10:20:30m\x1b\\");
+    }
+    #[test]
+    fn decrqss_sgr_round_trips() {
+        let mut t = Term::new(20, 4);
+        feed(&mut t, "\x1b[1;4:5;38;2;9;8;7;48;5;99;58;2;1;1;1m");
+        let reply = decrqss(&mut t, "m");
+        let sgr = reply.strip_prefix("\x1bP1$r").unwrap().strip_suffix("\x1b\\").unwrap().to_string();
+        let mut u = Term::new(20, 4);
+        feed(&mut u, &format!("\x1b[{sgr}"));
+        assert_eq!(decrqss(&mut u, "m"), reply);
+    }
+    #[test]
+    fn decrqss_scroll_region_and_cursor_style() {
+        let mut t = Term::new(20, 10);
+        assert_eq!(decrqss(&mut t, "r"), "\x1bP1$r1;10r\x1b\\");
+        feed(&mut t, "\x1b[3;7r");
+        assert_eq!(decrqss(&mut t, "r"), "\x1bP1$r3;7r\x1b\\");
+        feed(&mut t, "\x1b[6 q");
+        assert_eq!(decrqss(&mut t, " q"), "\x1bP1$r6 q\x1b\\");
+        feed(&mut t, "\x1b[3 q");
+        assert_eq!(decrqss(&mut t, " q"), "\x1bP1$r3 q\x1b\\");
+        feed(&mut t, "\x1b[2 q");
+        assert_eq!(decrqss(&mut t, " q"), "\x1bP1$r2 q\x1b\\");
+    }
+    #[test]
+    fn decrqss_unknown() {
+        let mut t = Term::new(20, 4);
+        for pt in ["\"p", "s", "t", "", "mm"] {
+            assert_eq!(decrqss(&mut t, pt), "\x1bP0$r\x1b\\", "{pt:?}");
+        }
+        t.replies.clear();
+        let mut p = crate::parser::Parser::new();
+        p.advance(&mut t, b"\x1bP$qr\x9c");
+        assert_eq!(t.replies, b"\x1bP1$r1;4r\x1b\\");
     }
     #[test]
     fn unknown_dcs_is_ignored() {
