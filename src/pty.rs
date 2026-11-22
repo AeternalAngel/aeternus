@@ -14,7 +14,7 @@ pub struct Pty {
     master: Box<dyn MasterPty + Send>,
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct Size {
     pub cols: u16,
     pub rows: u16,

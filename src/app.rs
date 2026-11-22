@@ -51,6 +51,7 @@ struct Tab {
     id: u64,
     term: Arc<Mutex<Term>>,
     pty: Option<Pty>,
+    size: Size,
     dirty: Arc<AtomicBool>,
     want_lock: Arc<AtomicBool>,
     reader: thread::Thread,
@@ -389,7 +390,15 @@ impl State {
             .name(format!("pty-reader-{id}"))
             .spawn(move || reader_loop(id, reader, t2, writer, d2, w2, proxy))
             .map_err(|e| format!("could not start the reader thread: {e}"))?;
-        self.tabs.push(Tab { id, term, pty: Some(pty), dirty, want_lock, reader: handle.thread().clone() });
+        self.tabs.push(Tab {
+            id,
+            term,
+            pty: Some(pty),
+            size,
+            dirty,
+            want_lock,
+            reader: handle.thread().clone(),
+        });
         self.active = self.tabs.len() - 1;
         self.search_retarget();
         self.renderer.reset_trail();
@@ -458,7 +467,7 @@ impl State {
     fn resize_active(&mut self) {
         let size = self.pty_size();
         let cell_px = self.renderer.cell_px();
-        let Some(tab) = self.tabs.get(self.active) else { return };
+        let Some(tab) = self.tabs.get_mut(self.active) else { return };
         let Ok(mut t) = tab.term.lock() else { return };
         t.cell_px = cell_px;
         if size.cols as usize != t.cols() || size.rows as usize != t.rows() {
@@ -466,6 +475,10 @@ impl State {
             if let Some(s) = self.search.as_mut() {
                 s.mark_stale();
             }
+        }
+        drop(t);
+        if size != tab.size {
+            tab.size = size;
             if let Some(p) = &tab.pty {
                 p.resize(size);
             }
