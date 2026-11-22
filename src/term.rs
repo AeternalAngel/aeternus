@@ -6,10 +6,13 @@ use serde::Deserialize;
 use crate::cell::{flags, Cell, Color};
 use crate::colors::{DEFAULT_BG, DEFAULT_FG};
 use crate::config::Config;
+use crate::graphics::{Graphics, QUOTA};
 use crate::grid::Grid;
 use crate::parser::Perform;
 use crate::terminfo::{self, Cap};
 use winit::window::CursorIcon;
+
+mod kitty;
 
 const SCROLLBACK_LINES: usize = 10_000;
 pub const SYNC_TIMEOUT: Duration = Duration::from_millis(150);
@@ -242,6 +245,9 @@ pub struct Term {
     pub notifications: Vec<Notification>,
     notify_partial: Option<(String, Notification)>,
     pointer_stack: Vec<CursorIcon>,
+    pub graphics: Graphics,
+    saved_graphics: Option<Graphics>,
+    kitty_pending: Option<kitty::Pending>,
 }
 fn default_tabs(cols: usize) -> Vec<bool> {
     (0..cols).map(|c| c > 0 && c % 8 == 0).collect()
@@ -310,6 +316,9 @@ impl Term {
             notifications: Vec::new(),
             notify_partial: None,
             pointer_stack: Vec::new(),
+            graphics: Graphics::default(),
+            saved_graphics: None,
+            kitty_pending: None,
         }
     }
     pub fn apply_config(&mut self, cfg: &Config) {
@@ -330,6 +339,33 @@ impl Term {
             self.popped += 1;
         }
         self.display_offset = self.display_offset.min(self.scrollback.len());
+        self.graphics.prune_above(self.popped as isize);
+    }
+    fn screen_base(&self) -> isize {
+        (self.popped + self.scrollback.len()) as isize
+    }
+    fn shift_images(&mut self, top: usize, bottom: usize, up: isize) {
+        let base = self.screen_base();
+        self.graphics.shift(base, top, bottom, up);
+    }
+    fn make_room(&mut self, need: usize) -> bool {
+        if need > QUOTA {
+            return false;
+        }
+        loop {
+            let used = self.graphics.bytes() + self.saved_graphics.as_ref().map_or(0, Graphics::bytes);
+            if used + need <= QUOTA {
+                return true;
+            }
+            let freed = self
+                .graphics
+                .evict_one(true)
+                .or_else(|| self.saved_graphics.as_mut().and_then(|g| g.evict_one(false)))
+                .or_else(|| self.graphics.evict_one(false));
+            if freed.is_none() {
+                return false;
+            }
+        }
     }
     pub fn cols(&self) -> usize {
         self.grid.cols()
@@ -666,6 +702,11 @@ impl Term {
         self.scroll_top = 0;
         self.scroll_bottom = rows - 1;
         self.move_to(self.cursor.row, self.cursor.col);
+        let limit = self.screen_base() + rows as isize;
+        self.graphics.prune_below(limit);
+        if let Some(g) = &mut self.saved_graphics {
+            g.prune_below(limit);
+        }
     }
 
     fn reflow(&mut self, cols: usize, rows: usize) {
@@ -695,6 +736,17 @@ impl Term {
             physical.push((row[..len].to_vec(), wrapped));
         }
 
+        let phys_len = physical.len();
+        let mut anchors: Vec<(usize, usize, usize)> = (self.graphics.placements.iter().enumerate())
+            .filter_map(|(k, p)| {
+                let i = p.line - self.popped as isize;
+                (i >= 0).then_some((i as usize, p.col, k))
+            })
+            .collect();
+        anchors.sort_unstable();
+        let mut next_anchor = 0;
+        let mut open_anchors: Vec<(usize, usize)> = Vec::new();
+        let mut moved: Vec<(usize, usize, usize)> = Vec::new();
         let mut new_rows: Vec<Vec<Cell>> = Vec::new();
         let mut new_cursor = (0usize, 0usize);
         let mut logical: Vec<Cell> = Vec::new();
@@ -703,6 +755,11 @@ impl Term {
         for (i, (line, wrapped)) in physical.into_iter().enumerate() {
             if i == cursor_phys_index {
                 cursor_offset = Some(logical.len() + cursor_col);
+            }
+            while let Some(&(ai, col, k)) = anchors.get(next_anchor).filter(|a| a.0 == i) {
+                debug_assert_eq!(ai, i);
+                open_anchors.push((k, logical.len() + col));
+                next_anchor += 1;
             }
             logical.extend(line.into_iter().map(|mut c| {
                 c.flags &= !WRAPLINE;
@@ -714,6 +771,7 @@ impl Term {
                 if let Some(off) = cursor_offset.take() {
                     new_cursor = (base + off / cols, off % cols);
                 }
+                place_anchors(&mut open_anchors, &mut moved, base, chunks.len(), cols);
                 new_rows.extend(chunks);
             }
         }
@@ -723,7 +781,18 @@ impl Term {
             if let Some(off) = cursor_offset {
                 new_cursor = (base + off / cols, off % cols);
             }
+            place_anchors(&mut open_anchors, &mut moved, base, chunks.len(), cols);
             new_rows.extend(chunks);
+        }
+        let total_rows = new_rows.len();
+        for &(i, col, k) in &anchors[next_anchor..] {
+            moved.push((k, total_rows + (i - phys_len), col.min(cols - 1)));
+        }
+        let popped = self.popped as isize;
+        for (k, row, col) in moved {
+            let p = &mut self.graphics.placements[k];
+            p.line = popped + row as isize;
+            p.col = col;
         }
 
         let total = new_rows.len();
@@ -800,6 +869,7 @@ impl Term {
     fn push_scrollback(&mut self, n: usize) {
         if self.max_scrollback == 0 {
             self.popped += n;
+            self.graphics.prune_above(self.popped as isize);
             return;
         }
         for i in 0..n {
@@ -819,11 +889,14 @@ impl Term {
         if self.display_offset > 0 {
             self.display_offset = (self.display_offset + n).min(self.scrollback.len());
         }
+        self.graphics.prune_above(self.popped as isize);
     }
     fn scroll_up_region(&mut self, n: usize) {
         let (top, bottom) = (self.scroll_top, self.scroll_bottom);
         if top == 0 && bottom == self.rows() - 1 && self.main_grid.is_none() {
             self.push_scrollback(n.min(self.rows()));
+        } else {
+            self.shift_images(top, bottom, n.min(bottom + 1 - top) as isize);
         }
         let b = self.blank();
         self.grid.scroll_up(top, bottom, n, b);
@@ -841,6 +914,7 @@ impl Term {
         if self.cursor.row == self.scroll_top {
             let b = self.blank();
             self.grid.scroll_down(self.scroll_top, self.scroll_bottom, 1, b);
+            self.shift_images(self.scroll_top, self.scroll_bottom, -1);
         } else if self.cursor.row > 0 {
             self.cursor.row -= 1;
         }
@@ -925,8 +999,11 @@ impl Term {
                 for i in 0..rows {
                     self.grid.fill(i, 0, cols, b);
                 }
+                let base = self.screen_base();
+                self.graphics.remove_placements(|p| p.bottom() > base, false);
             }
             3 => {
+                self.graphics.clear();
                 self.popped += self.scrollback.len();
                 self.scrollback.clear();
                 self.display_offset = 0;
@@ -956,6 +1033,8 @@ impl Term {
         if r >= self.scroll_top && r <= self.scroll_bottom {
             let b = self.blank();
             self.grid.scroll_down(r, self.scroll_bottom, n, b);
+            let n = n.min(self.scroll_bottom + 1 - r);
+            self.shift_images(r, self.scroll_bottom, -(n as isize));
             self.cursor.col = 0;
             self.wrap_pending = false;
         }
@@ -965,6 +1044,8 @@ impl Term {
         if r >= self.scroll_top && r <= self.scroll_bottom {
             let b = self.blank();
             self.grid.scroll_up(r, self.scroll_bottom, n, b);
+            let n = n.min(self.scroll_bottom + 1 - r);
+            self.shift_images(r, self.scroll_bottom, n as isize);
             self.cursor.col = 0;
             self.wrap_pending = false;
         }
@@ -1053,10 +1134,12 @@ impl Term {
             }
             let blank = Grid::new(self.cols(), self.rows());
             self.main_grid = Some(std::mem::replace(&mut self.grid, blank));
+            self.saved_graphics = Some(std::mem::take(&mut self.graphics));
         } else {
             if let Some(g) = self.main_grid.take() {
                 self.grid = g;
             }
+            self.graphics = self.saved_graphics.take().unwrap_or_default();
             if save {
                 self.restore_cursor();
             }
@@ -1799,6 +1882,18 @@ fn parse_osc7(rest: &[u8]) -> Option<String> {
     }
 }
 
+fn place_anchors(
+    open: &mut Vec<(usize, usize)>,
+    moved: &mut Vec<(usize, usize, usize)>,
+    base: usize,
+    chunks: usize,
+    cols: usize,
+) {
+    for (k, off) in open.drain(..) {
+        let row = (off / cols).min(chunks.saturating_sub(1));
+        moved.push((k, base + row, (off - row * cols).min(cols - 1)));
+    }
+}
 fn wrap_logical_line(line: Vec<Cell>, cols: usize) -> Vec<Vec<Cell>> {
     let len = line.len();
     if len == 0 {
@@ -2138,7 +2233,9 @@ impl Perform for Term {
             (None, b'S') => self.scroll_up_region(p(0, 1)),
             (None, b'T') => {
                 let b = self.blank();
-                self.grid.scroll_down(self.scroll_top, self.scroll_bottom, p(0, 1), b);
+                let n = p(0, 1).min(self.scroll_bottom + 1 - self.scroll_top);
+                self.grid.scroll_down(self.scroll_top, self.scroll_bottom, n, b);
+                self.shift_images(self.scroll_top, self.scroll_bottom, -(n as isize));
             }
             (None, b'h') => self.set_ansi_modes(params, true),
             (None, b'l') => self.set_ansi_modes(params, false),
@@ -2220,6 +2317,9 @@ impl Perform for Term {
             (None, [b'$'], b'q') => self.decrqss(data),
             _ => {}
         }
+    }
+    fn apc(&mut self, data: &[u8]) {
+        self.kitty_apc(data);
     }
     fn osc(&mut self, data: &[u8]) {
         let mut top = data.splitn(2, |&b| b == b';');

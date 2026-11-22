@@ -4,6 +4,7 @@ pub mod bench;
 pub mod cell;
 pub mod colors;
 pub mod config;
+pub mod graphics;
 pub mod grid;
 pub mod input;
 pub mod ipc;
