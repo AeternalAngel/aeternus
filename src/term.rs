@@ -240,8 +240,7 @@ pub struct Term {
     pub osc52: bool,
     pub notifications: Vec<Notification>,
     notify_partial: Option<(String, Notification)>,
-    pub pointer_shape: Option<CursorIcon>,
-    pointer_stack: Vec<Option<CursorIcon>>,
+    pointer_stack: Vec<CursorIcon>,
 }
 fn default_tabs(cols: usize) -> Vec<bool> {
     (0..cols).map(|c| c > 0 && c % 8 == 0).collect()
@@ -309,7 +308,6 @@ impl Term {
             osc52: true,
             notifications: Vec::new(),
             notify_partial: None,
-            pointer_shape: None,
             pointer_stack: Vec::new(),
         }
     }
@@ -1444,6 +1442,9 @@ impl Term {
             self.notify_partial = Some((id, n));
         }
     }
+    pub fn pointer_shape(&self) -> Option<CursorIcon> {
+        self.pointer_stack.last().copied()
+    }
     fn osc22(&mut self, rest: &[u8]) {
         let text = String::from_utf8_lossy(rest);
         let (op, names) = match text.chars().next() {
@@ -1452,39 +1453,31 @@ impl Term {
         };
         match op {
             '?' => {
-                let answers: Vec<String> = names
+                let answers: Vec<&str> = names
                     .split(',')
                     .map(|n| match n {
-                        "__current__" => self.pointer_shape.unwrap_or(CursorIcon::Text).name().to_string(),
-                        "__default__" => CursorIcon::Text.name().to_string(),
-                        "__grabbed__" => CursorIcon::Default.name().to_string(),
-                        n => if pointer_icon(n).is_some() { "1" } else { "0" }.to_string(),
+                        "__current__" => self.pointer_shape().map_or("0", |i| i.name()),
+                        "__default__" => CursorIcon::Text.name(),
+                        "__grabbed__" => CursorIcon::Default.name(),
+                        n if pointer_icon(n).is_some() => "1",
+                        _ => "0",
                     })
                     .collect();
                 let s = format!("\x1b]22;{}\x1b\\", answers.join(","));
                 self.reply(&s);
             }
             '<' => {
-                if let Some(prev) = self.pointer_stack.pop() {
-                    self.pointer_shape = prev;
-                }
+                self.pointer_stack.pop();
             }
+            '=' if names.is_empty() => self.pointer_stack.clear(),
             _ => {
-                let icon = if names.is_empty() {
-                    None
-                } else {
-                    match names.split(',').find_map(pointer_icon) {
-                        Some(i) => Some(i),
-                        None => return,
-                    }
-                };
-                if op == '>' {
-                    if self.pointer_stack.len() >= POINTER_STACK_MAX {
-                        self.pointer_stack.remove(0);
-                    }
-                    self.pointer_stack.push(self.pointer_shape);
+                let Some(icon) = names.split(',').find_map(pointer_icon) else { return };
+                if op == '=' && !self.pointer_stack.is_empty() {
+                    self.pointer_stack.pop();
+                } else if self.pointer_stack.len() >= POINTER_STACK_MAX {
+                    self.pointer_stack.remove(0);
                 }
-                self.pointer_shape = icon.filter(|&i| i != CursorIcon::Text);
+                self.pointer_stack.push(icon);
             }
         }
     }
@@ -2889,19 +2882,36 @@ mod tests {
     fn osc22_pointer_shape() {
         let mut t = Term::new(20, 4);
         feed(&mut t, "\x1b]22;pointer\x07");
-        assert_eq!(t.pointer_shape, Some(CursorIcon::Pointer));
+        assert_eq!(t.pointer_shape(), Some(CursorIcon::Pointer));
         feed(&mut t, "\x1b]22;bogus\x07");
-        assert_eq!(t.pointer_shape, Some(CursorIcon::Pointer));
+        assert_eq!(t.pointer_shape(), Some(CursorIcon::Pointer));
         feed(&mut t, "\x1b]22;>bogus,watch\x07");
-        assert_eq!(t.pointer_shape, Some(CursorIcon::Wait));
+        assert_eq!(t.pointer_shape(), Some(CursorIcon::Wait));
+        feed(&mut t, "\x1b]22;=crosshair\x07");
+        assert_eq!(t.pointer_shape(), Some(CursorIcon::Crosshair));
         feed(&mut t, "\x1b]22;<\x07");
-        assert_eq!(t.pointer_shape, Some(CursorIcon::Pointer));
-        feed(&mut t, "\x1b]22;\x07");
-        assert_eq!(t.pointer_shape, None);
-        feed(&mut t, "\x1b]22;?crosshair,bogus,__current__\x07");
-        assert_eq!(t.replies, b"\x1b]22;1,0,text\x1b\\");
+        assert_eq!(t.pointer_shape(), Some(CursorIcon::Pointer));
+        feed(&mut t, "\x1b]22;<\x07\x1b]22;<\x07");
+        assert_eq!(t.pointer_shape(), None);
+        feed(&mut t, "\x1b]22;text\x07\x1b]22;\x07");
+        assert_eq!(t.pointer_shape(), None);
         feed(&mut t, "\x1b]22;grab\x07\x1bc");
-        assert_eq!(t.pointer_shape, None);
+        assert_eq!(t.pointer_shape(), None);
+    }
+    #[test]
+    fn osc22_query_current() {
+        let mut t = Term::new(20, 4);
+        feed(&mut t, "\x1b]22;?__current__\x1b\\");
+        assert_eq!(t.replies, b"\x1b]22;0\x1b\\");
+        t.replies.clear();
+        feed(&mut t, "\x1b]22;>wait\x07\x1b]22;?__current__\x1b\\");
+        assert_eq!(t.replies, b"\x1b]22;wait\x1b\\");
+    }
+    #[test]
+    fn osc22_query_support() {
+        let mut t = Term::new(20, 4);
+        feed(&mut t, "\x1b]22;?pointer,crosshair,no-such-name,wait\x1b\\");
+        assert_eq!(t.replies, b"\x1b]22;1,1,0,1\x1b\\");
     }
     #[test]
     fn bell_sets_flag() {

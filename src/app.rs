@@ -1037,7 +1037,7 @@ impl State {
         self.window.set_cursor(icon);
     }
     fn term_pointer(&self) -> CursorIcon {
-        self.with_term(|t| t.pointer_shape).unwrap_or(CursorIcon::Text)
+        self.with_term(|t| t.pointer_shape()).unwrap_or(CursorIcon::Text)
     }
     fn pointer_over_term(&self) -> bool {
         !self.renderer.settings_open()
@@ -1274,7 +1274,7 @@ impl State {
             if !t.title.is_empty() && t.title != self.last_title {
                 title = Some(t.title.clone());
             }
-            pointer = t.pointer_shape;
+            pointer = t.pointer_shape();
             let now = Instant::now();
             t.expire_sync(now);
             if let Some(s) = self.search.as_mut() {
