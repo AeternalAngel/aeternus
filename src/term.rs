@@ -8,6 +8,7 @@ use crate::colors::{DEFAULT_BG, DEFAULT_FG};
 use crate::config::Config;
 use crate::grid::Grid;
 use crate::parser::Perform;
+use crate::terminfo::{self, Cap};
 use winit::window::CursorIcon;
 
 const SCROLLBACK_LINES: usize = 10_000;
@@ -1339,6 +1340,21 @@ impl Term {
             Charset::DecGraphics => dec_graphics(c),
         }
     }
+    fn xtgettcap(&mut self, data: &[u8]) {
+        for hex in data.split(|&b| b == b';') {
+            let cap = hex_decode(hex)
+                .and_then(|n| String::from_utf8(n).ok())
+                .and_then(|n| terminfo::capability(&n));
+            let name = String::from_utf8_lossy(hex);
+            let s = match cap {
+                Some(Cap::Bool) => format!("\x1bP1+r{name}\x1b\\"),
+                Some(Cap::Num(n)) => format!("\x1bP1+r{name}={}\x1b\\", hex_encode(n.to_string().as_bytes())),
+                Some(Cap::Str(v)) => format!("\x1bP1+r{name}={}\x1b\\", hex_encode(&v)),
+                None => "\x1bP0+r\x1b\\".to_string(),
+            };
+            self.reply(&s);
+        }
+    }
     fn shell_mark(&mut self, rest: &[u8]) {
         let mark = match rest.first() {
             Some(b'A' | b'P' | b'N') => PROMPT_MARK,
@@ -1557,6 +1573,15 @@ impl Term {
     fn print_slow(&self) -> bool {
         self.charsets[self.gl] != Charset::Ascii || self.insert_mode || self.join_next
     }
+}
+fn hex_encode(b: &[u8]) -> String {
+    b.iter().map(|x| format!("{x:02X}")).collect()
+}
+fn hex_decode(s: &[u8]) -> Option<Vec<u8>> {
+    if s.is_empty() || !s.len().is_multiple_of(2) {
+        return None;
+    }
+    s.chunks(2).map(|p| u8::from_str_radix(std::str::from_utf8(p).ok()?, 16).ok()).collect()
 }
 fn truncate_chars(s: &mut String, max: usize) {
     if let Some((i, _)) = s.char_indices().nth(max) {
@@ -2128,6 +2153,11 @@ impl Perform for Term {
             [b')'] => self.charsets[1] = charset_for(byte),
             [b'#'] if byte == b'8' => self.screen_alignment(),
             _ => {}
+        }
+    }
+    fn dcs(&mut self, _params: &[u16], inter: &[u8], private: Option<u8>, action: u8, data: &[u8]) {
+        if let (None, [b'+'], b'q') = (private, inter, action) {
+            self.xtgettcap(data);
         }
     }
     fn osc(&mut self, data: &[u8]) {
@@ -2897,6 +2927,59 @@ mod tests {
         assert_eq!(t.pointer_shape(), None);
         feed(&mut t, "\x1b]22;grab\x07\x1bc");
         assert_eq!(t.pointer_shape(), None);
+    }
+    fn xtgettcap(t: &mut Term, names: &[&str]) -> Vec<String> {
+        let hex: Vec<String> = names.iter().map(|n| hex_encode(n.as_bytes())).collect();
+        t.replies.clear();
+        feed(t, &format!("\x1bP+q{}\x1b\\", hex.join(";")));
+        let r = String::from_utf8(std::mem::take(&mut t.replies)).unwrap();
+        r.split_inclusive("\x1b\\").map(str::to_string).collect()
+    }
+    fn tcap_value(reply: &str) -> Option<Vec<u8>> {
+        let body = reply.strip_prefix("\x1bP1+r")?.strip_suffix("\x1b\\")?;
+        hex_decode(body.split_once('=')?.1.as_bytes())
+    }
+    #[test]
+    fn xtgettcap_known_capabilities() {
+        let mut t = Term::new(20, 4);
+        let r = xtgettcap(&mut t, &["TN", "Co", "colors", "Smulx", "Setulc", "Sync"]);
+        assert_eq!(r.len(), 6);
+        assert_eq!(r[0], format!("\x1bP1+r{}={}\x1b\\", hex_encode(b"TN"), hex_encode(b"xterm-aeternus")));
+        assert_eq!(tcap_value(&r[1]).unwrap(), b"256");
+        assert_eq!(tcap_value(&r[2]).unwrap(), b"256");
+        assert_eq!(tcap_value(&r[3]).unwrap(), b"\x1b[4:%p1%dm");
+        assert!(tcap_value(&r[4]).unwrap().starts_with(b"\x1b[58:2::"));
+        assert_eq!(tcap_value(&r[5]).unwrap(), b"\x1b[?2026%?%p1%{1}%-%tl%eh%;");
+    }
+    #[test]
+    fn xtgettcap_booleans_and_unknown() {
+        let mut t = Term::new(20, 4);
+        let r = xtgettcap(&mut t, &["RGB", "nope", "Tc"]);
+        assert_eq!(
+            r,
+            vec![
+                format!("\x1bP1+r{}\x1b\\", hex_encode(b"RGB")),
+                "\x1bP0+r\x1b\\".to_string(),
+                format!("\x1bP1+r{}\x1b\\", hex_encode(b"Tc")),
+            ]
+        );
+        t.replies.clear();
+        feed(&mut t, "\x1bP+qZZ;5\x1b\\");
+        assert_eq!(t.replies, b"\x1bP0+r\x1b\\\x1bP0+r\x1b\\");
+    }
+    #[test]
+    fn xtgettcap_with_8bit_st_and_lowercase_hex() {
+        let mut t = Term::new(20, 4);
+        let mut p = crate::parser::Parser::new();
+        p.advance(&mut t, b"\x1bP+q544e\x9c");
+        assert_eq!(tcap_value(&String::from_utf8(t.replies.clone()).unwrap()).unwrap(), b"xterm-aeternus");
+    }
+    #[test]
+    fn unknown_dcs_is_ignored() {
+        let mut t = Term::new(10, 1);
+        feed(&mut t, "\x1bP1;2|whatever\x1b\\\x1bPq#0;2;0;0;0~\x1b\\ok");
+        assert!(t.replies.is_empty());
+        assert_eq!(row_text(&t, 0), "ok        ");
     }
     #[test]
     fn osc22_query_current() {

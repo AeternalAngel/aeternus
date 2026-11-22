@@ -15,6 +15,7 @@ All notable changes to this project are documented here. The format is based on
 - Shell integration (OSC 133): prompts marked by the shell can be reached with `Ctrl+Shift+Z` and `Ctrl+Shift+X` (View > Previous Prompt / Next Prompt), and `Ctrl+Shift+G` (Edit > Select Command Output) selects the output of the last command, going one command back each time it is pressed again. The marks survive reflow. fish 4.0 marks its prompts by itself; the README has snippets for zsh and bash. The new keybindings are `prev_prompt`, `next_prompt` and `select_output`.
 - Desktop notifications: OSC 9, OSC 777 (`notify;title;body`) and kitty's OSC 99 (title and body, chunks, base64, urgency and `o=unfocused`) are shown with `notify-send`. ConEmu's `OSC 9;4` progress sequences are ignored. The new `terminal.notifications` option turns them off.
 - Mouse pointer shape (OSC 22): programs can change the pointer over the terminal using CSS or X11 cursor names, with kitty's push (`>`), pop (`<`) and query (`?`) forms.
+- XTGETTCAP (`DCS + q`): programs can query terminfo capabilities from the terminal, which also works over SSH where the entry may not be installed. The answers come from the bundled `xterm-aeternus` entry (now declaring `colors#256` itself), plus `TN`, `Co` and `RGB`.
 - Blinking text: cells with `CSI 5 m` or `CSI 6 m` now blink at the cursor blink rate while the window is focused. Blinking stops, with the text shown, when the window loses focus.
 
 ## [1.4.2] - 2026-11-20

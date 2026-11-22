@@ -1,6 +1,7 @@
 xterm-aeternus|Aeternus terminal emulator,
 	Su,
 	Tc,
+	colors#256,
 	Cr=\E]112\007,
 	Cs=\E]12;%p1%s\007,
 	Se=\E[0 q,
