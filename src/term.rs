@@ -2815,6 +2815,33 @@ mod tests {
         assert_eq!(t.command_outputs(), vec![(1, 1)]);
     }
     #[test]
+    fn osc133_accepts_fish_parameters() {
+        let mut t = Term::new(30, 8);
+        feed(&mut t, "\x1b]133;A;click_events=1\x07> ls\r\n\x1b]133;C;cmdline_url=ls%20-la\x07a\r\nb\r\n\x1b]133;D;0\x07");
+        feed(
+            &mut t,
+            "\x1b]133;A;click_events=1\x07> true\r\n\x1b]133;C;cmdline_url=true\x07\x1b]133;D;0\x07",
+        );
+        feed(
+            &mut t,
+            "\x1b]133;A;click_events=1\x07> false\r\n\x1b]133;C;cmdline_url=false\x07x\r\n\x1b]133;D;1\x07",
+        );
+        feed(&mut t, "\x1b]133;A;click_events=1\x07> ");
+        assert_eq!(t.prompt_lines(), vec![0, 3, 4, 6]);
+        assert_eq!(t.command_outputs(), vec![(1, 2), (5, 5)]);
+        assert_eq!(t.select_command_output().as_deref(), Some("x"));
+        assert_eq!(t.select_command_output().as_deref(), Some("a\nb"));
+    }
+    #[test]
+    fn osc133_without_b_or_c_falls_back_to_line_after_prompt() {
+        let mut t = Term::new(30, 8);
+        feed(
+            &mut t,
+            "\x1b]133;A;click_events=1\x07> ls\r\nout\r\n\x1b]133;D;0\x07\x1b]133;A;click_events=1\x07> ",
+        );
+        assert_eq!(t.command_outputs(), vec![(1, 1)]);
+    }
+    #[test]
     fn osc133_ignored_on_alt_screen() {
         let mut t = Term::new(20, 4);
         shell_session(&mut t);
