@@ -22,6 +22,7 @@ use crate::config::{self, Action as KeyAction, Config};
 use crate::input::{self, KeyInput, KeyModes};
 use crate::ipc::{self, Command};
 use crate::log;
+use crate::notify;
 use crate::parser::Parser;
 use crate::pty::{self, Pty, Size};
 use crate::render::{Action, Renderer, SettingsOutcome, View};
@@ -229,6 +230,7 @@ struct State {
     active: usize,
     next_id: u64,
     last_title: String,
+    last_pointer: Option<CursorIcon>,
     cfg: Config,
     scroll_accum: f32,
     clipboard: Option<Clipboard>,
@@ -277,6 +279,7 @@ impl State {
             active: 0,
             next_id: 0,
             last_title: String::new(),
+            last_pointer: None,
             cfg,
             scroll_accum: 0.0,
             clipboard: Clipboard::new().ok(),
@@ -742,6 +745,16 @@ impl State {
             KeyAction::Fullscreen => Action::Fullscreen,
             KeyAction::Preferences => Action::Settings,
             KeyAction::Search => Action::Find,
+            KeyAction::PrevPrompt | KeyAction::NextPrompt | KeyAction::SelectOutput => {
+                if self.with_term(|t| t.is_alt_screen()) {
+                    return false;
+                }
+                match action {
+                    KeyAction::PrevPrompt => Action::PrevPrompt,
+                    KeyAction::NextPrompt => Action::NextPrompt,
+                    _ => Action::SelectOutput,
+                }
+            }
             KeyAction::ScrollPageUp
             | KeyAction::ScrollPageDown
             | KeyAction::ScrollToTop
@@ -978,6 +991,20 @@ impl State {
             Action::NextTab => self.cycle_tab(1),
             Action::PrevTab => self.cycle_tab(-1),
             Action::Find => self.open_search(),
+            Action::PrevPrompt => {
+                self.with_term(|t| t.jump_to_prompt(true));
+            }
+            Action::NextPrompt => {
+                self.with_term(|t| t.jump_to_prompt(false));
+            }
+            Action::SelectOutput => {
+                let text = self.with_term(|t| t.select_command_output());
+                if let (Some(text), Some(cb)) = (text, self.clipboard.as_mut()) {
+                    if !text.is_empty() {
+                        let _ = cb.set().clipboard(ClipKind::Primary).text(text);
+                    }
+                }
+            }
             Action::Fullscreen => {
                 let on = self.window.fullscreen().is_some();
                 self.window.set_fullscreen(if on { None } else { Some(Fullscreen::Borderless(None)) });
@@ -1006,7 +1033,16 @@ impl State {
             && self.with_term(|t| {
                 (t.mouse_mode == MouseMode::Off || mods.shift_key()) && t.url_at(row, col).is_some()
             });
-        self.window.set_cursor(if over { CursorIcon::Pointer } else { CursorIcon::Text });
+        let icon = if over { CursorIcon::Pointer } else { self.term_pointer() };
+        self.window.set_cursor(icon);
+    }
+    fn term_pointer(&self) -> CursorIcon {
+        self.with_term(|t| t.pointer_shape).unwrap_or(CursorIcon::Text)
+    }
+    fn pointer_over_term(&self) -> bool {
+        !self.renderer.settings_open()
+            && self.renderer.menu_open().is_none()
+            && self.mouse_pos.1 > self.renderer.top_inset() as f64
     }
     fn cursor_moved(&mut self, x: f64, y: f64, mods: ModifiersState) {
         self.mouse_pos = (x, y);
@@ -1045,7 +1081,7 @@ impl State {
         ui_clear |= self.renderer.set_hover_gear(false);
         ui_clear |= self.renderer.clear_hover();
         if ui_clear {
-            self.window.set_cursor(CursorIcon::Text);
+            self.window.set_cursor(self.term_pointer());
             self.window.request_redraw();
         }
         let cell = self.renderer.cell_at(x, y);
@@ -1186,10 +1222,18 @@ impl State {
     }
     fn wakeup(&mut self, id: u64) {
         let Some(idx) = self.tabs.iter().position(|t| t.id == id) else { return };
-        let (bell, clip) = match self.tabs[idx].term.lock() {
-            Ok(mut t) => (std::mem::take(&mut t.bell), t.clipboard_write.take()),
+        let (bell, clip, notes) = match self.tabs[idx].term.lock() {
+            Ok(mut t) => {
+                (std::mem::take(&mut t.bell), t.clipboard_write.take(), std::mem::take(&mut t.notifications))
+            }
             Err(_) => return,
         };
+        if self.cfg.terminal.notifications {
+            let visible = self.focused && idx == self.active;
+            for n in notes.iter().filter(|n| !(n.only_unfocused && visible)) {
+                notify::send(n, APP_ID);
+            }
+        }
         if let Some((kind, text)) = clip {
             self.osc52_copy(kind, text);
         }
@@ -1222,6 +1266,7 @@ impl State {
         let reader = tab.reader.clone();
         let mut skip_draw = false;
         let mut title = None;
+        let pointer;
         {
             let mut t = term.lock().unwrap_or_else(|e| e.into_inner());
             tab.want_lock.store(false, Ordering::Release);
@@ -1229,6 +1274,7 @@ impl State {
             if !t.title.is_empty() && t.title != self.last_title {
                 title = Some(t.title.clone());
             }
+            pointer = t.pointer_shape;
             let now = Instant::now();
             t.expire_sync(now);
             if let Some(s) = self.search.as_mut() {
@@ -1251,6 +1297,12 @@ impl State {
         if let Some(title) = title {
             self.window.set_title(&title);
             self.last_title = title;
+        }
+        if pointer != self.last_pointer {
+            self.last_pointer = pointer;
+            if self.pointer_over_term() {
+                self.window.set_cursor(pointer.unwrap_or(CursorIcon::Text));
+            }
         }
         if !skip_draw {
             self.window.pre_present_notify();

@@ -8,6 +8,7 @@ use crate::colors::{DEFAULT_BG, DEFAULT_FG};
 use crate::config::Config;
 use crate::grid::Grid;
 use crate::parser::Perform;
+use winit::window::CursorIcon;
 
 const SCROLLBACK_LINES: usize = 10_000;
 pub const SYNC_TIMEOUT: Duration = Duration::from_millis(150);
@@ -18,6 +19,14 @@ const KB_STACK_MAX: usize = 16;
 pub const KB_SUPPORTED: u8 = 0b1;
 pub const WRAPLINE: u16 = 1 << 8;
 pub const WIDE_SPACER: u16 = 1 << 9;
+pub const PROMPT_MARK: u16 = 1 << 13;
+pub const INPUT_MARK: u16 = 1 << 14;
+pub const OUTPUT_MARK: u16 = 1 << 15;
+const MARKS: u16 = PROMPT_MARK | INPUT_MARK | OUTPUT_MARK;
+const NOTIFY_QUEUE_MAX: usize = 16;
+const NOTIFY_TITLE_MAX: usize = 256;
+const NOTIFY_BODY_MAX: usize = 4096;
+const POINTER_STACK_MAX: usize = 16;
 const ZWJ: char = '\u{200D}';
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Deserialize)]
@@ -76,6 +85,24 @@ impl Pen {
 pub struct Cursor {
     pub row: usize,
     pub col: usize,
+}
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Urgency {
+    Low,
+    Normal,
+    Critical,
+}
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct Notification {
+    pub title: String,
+    pub body: String,
+    pub urgency: Urgency,
+    pub only_unfocused: bool,
+}
+impl Notification {
+    fn new() -> Self {
+        Self { title: String::new(), body: String::new(), urgency: Urgency::Normal, only_unfocused: false }
+    }
 }
 #[derive(Clone, Copy)]
 struct SavedCursor {
@@ -211,6 +238,10 @@ pub struct Term {
     palette_ansi: Box<[[u8; 3]; 256]>,
     pub clipboard_write: Option<(u8, String)>,
     pub osc52: bool,
+    pub notifications: Vec<Notification>,
+    notify_partial: Option<(String, Notification)>,
+    pub pointer_shape: Option<CursorIcon>,
+    pointer_stack: Vec<Option<CursorIcon>>,
 }
 fn default_tabs(cols: usize) -> Vec<bool> {
     (0..cols).map(|c| c > 0 && c % 8 == 0).collect()
@@ -276,6 +307,10 @@ impl Term {
             palette_ansi: Box::new(crate::colors::Palette::default().ansi),
             clipboard_write: None,
             osc52: true,
+            notifications: Vec::new(),
+            notify_partial: None,
+            pointer_shape: None,
+            pointer_stack: Vec::new(),
         }
     }
     pub fn apply_config(&mut self, cfg: &Config) {
@@ -845,6 +880,7 @@ impl Term {
         let title = std::mem::take(&mut self.title);
         let cwd = self.cwd.take();
         let replies = std::mem::take(&mut self.replies);
+        let notifications = std::mem::take(&mut self.notifications);
         let (fg, bg) = (self.default_fg, self.default_bg);
         let (shape, blink) = (self.default_cursor_shape, self.default_cursor_blink);
         let max_sb = self.max_scrollback;
@@ -856,6 +892,7 @@ impl Term {
         self.title = title;
         self.cwd = cwd;
         self.replies = replies;
+        self.notifications = notifications;
         self.default_fg = fg;
         self.default_bg = bg;
         self.default_cursor_shape = shape;
@@ -873,7 +910,7 @@ impl Term {
         match mode {
             0 => {
                 self.clear_wide_edges(r, c, cols);
-                self.grid.fill(r, c, cols, b);
+                self.fill_keep_marks(r, c, cols, b);
                 for i in (r + 1)..rows {
                     self.grid.fill(i, 0, cols, b);
                 }
@@ -883,7 +920,7 @@ impl Term {
                     self.grid.fill(i, 0, cols, b);
                 }
                 self.clear_wide_edges(r, 0, (c + 1).min(cols));
-                self.grid.fill(r, 0, (c + 1).min(cols), b);
+                self.fill_keep_marks(r, 0, (c + 1).min(cols), b);
             }
             2 => {
                 for i in 0..rows {
@@ -905,13 +942,13 @@ impl Term {
         match mode {
             0 => {
                 self.clear_wide_edges(r, c, cols);
-                self.grid.fill(r, c, cols, b);
+                self.fill_keep_marks(r, c, cols, b);
             }
             1 => {
                 self.clear_wide_edges(r, 0, (c + 1).min(cols));
-                self.grid.fill(r, 0, (c + 1).min(cols), b);
+                self.fill_keep_marks(r, 0, (c + 1).min(cols), b);
             }
-            2 => self.grid.fill(r, 0, cols, b),
+            2 => self.fill_keep_marks(r, 0, cols, b),
             _ => {}
         }
     }
@@ -1304,9 +1341,260 @@ impl Term {
             Charset::DecGraphics => dec_graphics(c),
         }
     }
+    fn shell_mark(&mut self, rest: &[u8]) {
+        let mark = match rest.first() {
+            Some(b'A' | b'P' | b'N') => PROMPT_MARK,
+            Some(b'B') => INPUT_MARK,
+            Some(b'C') => OUTPUT_MARK,
+            _ => return,
+        };
+        let (r, c) = (self.cursor.row, self.cursor.col);
+        self.grid.row_mut(r)[c].flags |= mark;
+    }
+    fn fill_keep_marks(&mut self, r: usize, from: usize, to: usize, b: Cell) {
+        for cell in &mut self.grid.row_mut(r)[from..to] {
+            *cell = Cell { flags: b.flags | (cell.flags & MARKS), ..b };
+        }
+    }
+    fn push_notification(&mut self, mut n: Notification) {
+        if n.title.trim().is_empty() {
+            n.title = std::mem::take(&mut n.body);
+        }
+        if n.title.trim().is_empty() || self.notifications.len() >= NOTIFY_QUEUE_MAX {
+            return;
+        }
+        truncate_chars(&mut n.title, NOTIFY_TITLE_MAX);
+        truncate_chars(&mut n.body, NOTIFY_BODY_MAX);
+        self.notifications.push(n);
+    }
+    fn osc9(&mut self, rest: &[u8]) {
+        let head = rest.split(|&b| b == b';').next().unwrap_or(&[]);
+        if !head.is_empty() && head.iter().all(u8::is_ascii_digit) {
+            return;
+        }
+        let mut n = Notification::new();
+        n.title = String::from_utf8_lossy(rest).into_owned();
+        self.push_notification(n);
+    }
+    fn osc777(&mut self, rest: &[u8]) {
+        let mut it = rest.splitn(3, |&b| b == b';');
+        if it.next() != Some(b"notify") {
+            return;
+        }
+        let mut n = Notification::new();
+        n.title = String::from_utf8_lossy(it.next().unwrap_or(&[])).into_owned();
+        n.body = String::from_utf8_lossy(it.next().unwrap_or(&[])).into_owned();
+        self.push_notification(n);
+    }
+    fn osc99(&mut self, rest: &[u8]) {
+        let mut it = rest.splitn(2, |&b| b == b';');
+        let meta = it.next().unwrap_or(&[]);
+        let payload = it.next().unwrap_or(&[]);
+        let (mut id, mut done, mut part, mut base64) = (String::new(), true, &b"title"[..], false);
+        let (mut urgency, mut when) = (None, None);
+        for kv in meta.split(|&b| b == b':') {
+            let mut kv = kv.splitn(2, |&b| b == b'=');
+            let key = kv.next().unwrap_or(&[]);
+            let val = kv.next().unwrap_or(&[]);
+            match key {
+                b"i" => id = String::from_utf8_lossy(val).into_owned(),
+                b"d" => done = val != b"0",
+                b"p" => part = val,
+                b"e" => base64 = val == b"1",
+                b"u" => {
+                    urgency = match val {
+                        b"0" => Some(Urgency::Low),
+                        b"2" => Some(Urgency::Critical),
+                        _ => Some(Urgency::Normal),
+                    }
+                }
+                b"o" => when = Some(val != b"always"),
+                _ => {}
+            }
+        }
+        let mut n = match self.notify_partial.take() {
+            Some((pid, n)) if pid == id => n,
+            _ => Notification::new(),
+        };
+        if let Some(u) = urgency {
+            n.urgency = u;
+        }
+        if let Some(w) = when {
+            n.only_unfocused = w;
+        }
+        let text = if base64 {
+            base64_decode(payload).map(|b| String::from_utf8_lossy(&b).into_owned())
+        } else {
+            Some(String::from_utf8_lossy(payload).into_owned())
+        };
+        let target = match part {
+            b"title" => Some(&mut n.title),
+            b"body" => Some(&mut n.body),
+            b"?" => return,
+            _ => None,
+        };
+        if let (Some(target), Some(text)) = (target, text) {
+            if target.len() + text.len() <= NOTIFY_BODY_MAX * 4 {
+                target.push_str(&text);
+            }
+        }
+        if done {
+            self.push_notification(n);
+        } else {
+            self.notify_partial = Some((id, n));
+        }
+    }
+    fn osc22(&mut self, rest: &[u8]) {
+        let text = String::from_utf8_lossy(rest);
+        let (op, names) = match text.chars().next() {
+            Some(c @ ('=' | '>' | '<' | '?')) => (c, &text[1..]),
+            _ => ('=', &text[..]),
+        };
+        match op {
+            '?' => {
+                let answers: Vec<String> = names
+                    .split(',')
+                    .map(|n| match n {
+                        "__current__" => self.pointer_shape.unwrap_or(CursorIcon::Text).name().to_string(),
+                        "__default__" => CursorIcon::Text.name().to_string(),
+                        "__grabbed__" => CursorIcon::Default.name().to_string(),
+                        n => if pointer_icon(n).is_some() { "1" } else { "0" }.to_string(),
+                    })
+                    .collect();
+                let s = format!("\x1b]22;{}\x1b\\", answers.join(","));
+                self.reply(&s);
+            }
+            '<' => {
+                if let Some(prev) = self.pointer_stack.pop() {
+                    self.pointer_shape = prev;
+                }
+            }
+            _ => {
+                let icon = if names.is_empty() {
+                    None
+                } else {
+                    match names.split(',').find_map(pointer_icon) {
+                        Some(i) => Some(i),
+                        None => return,
+                    }
+                };
+                if op == '>' {
+                    if self.pointer_stack.len() >= POINTER_STACK_MAX {
+                        self.pointer_stack.remove(0);
+                    }
+                    self.pointer_stack.push(self.pointer_shape);
+                }
+                self.pointer_shape = icon.filter(|&i| i != CursorIcon::Text);
+            }
+        }
+    }
+    fn prompt_lines(&self) -> Vec<usize> {
+        if self.is_alt_screen() {
+            return Vec::new();
+        }
+        let end = self.popped + self.scrollback.len() + self.rows();
+        (self.popped..end).filter(|&l| self.line_has_mark(l, PROMPT_MARK)).collect()
+    }
+    fn line_has_mark(&self, line: usize, mark: u16) -> bool {
+        self.line_cells(line).is_some_and(|cells| cells.iter().any(|c| c.flags & mark != 0))
+    }
+    fn line_is_blank(&self, line: usize) -> bool {
+        self.line_cells(line).is_none_or(|cells| {
+            cells.iter().all(|c| (c.ch == ' ' || c.flags & WIDE_SPACER != 0) && self.cluster(c).is_none())
+        })
+    }
+    fn scroll_line_to_top(&mut self, abs: usize) -> bool {
+        let sb = self.scrollback.len();
+        let target = (self.popped + sb).saturating_sub(abs).min(sb);
+        let changed = target != self.display_offset;
+        self.display_offset = target;
+        changed
+    }
+    pub fn jump_to_prompt(&mut self, up: bool) -> bool {
+        let top = self.abs_line(0);
+        let prompts = self.prompt_lines();
+        let target =
+            if up { prompts.iter().rev().find(|&&l| l < top) } else { prompts.iter().find(|&&l| l > top) };
+        match target {
+            Some(&l) => self.scroll_line_to_top(l),
+            None if !up && !prompts.is_empty() => self.scroll_to_bottom(),
+            None => false,
+        }
+    }
+    pub fn command_outputs(&self) -> Vec<(usize, usize)> {
+        let prompts = self.prompt_lines();
+        let cursor_line = self.popped + self.scrollback.len() + self.cursor.row;
+        let mut out = Vec::new();
+        for (i, &p) in prompts.iter().enumerate() {
+            let next = prompts.get(i + 1).copied();
+            let last = next.map_or(cursor_line, |n| n.saturating_sub(1));
+            let start = (p + 1..=last)
+                .find(|&l| self.line_has_mark(l, OUTPUT_MARK))
+                .or_else(|| (p..=last).find(|&l| self.line_has_mark(l, INPUT_MARK)).map(|l| l + 1))
+                .unwrap_or(p + 1);
+            let mut end = last;
+            while end > start && self.line_is_blank(end) {
+                end -= 1;
+            }
+            if start <= end && !self.line_is_blank(end) {
+                out.push((start, end));
+            }
+        }
+        out
+    }
+    pub fn select_command_output(&mut self) -> Option<String> {
+        let outputs = self.command_outputs();
+        let bottom = self.abs_line(self.rows().saturating_sub(1));
+        let current = self.selection_bounds().map(|(a, b)| (a.line, b.line));
+        let mut idx = outputs.iter().rposition(|&(s, _)| s <= bottom)?;
+        if current == Some(outputs[idx]) {
+            idx = idx.checked_sub(1)?;
+        }
+        let (start, end) = outputs[idx];
+        self.selection = Some(Selection {
+            anchor: SelPoint { line: start, col: 0 },
+            head: SelPoint { line: end, col: usize::MAX },
+            mode: SelMode::Line,
+        });
+        if start < self.abs_line(0) || start > bottom {
+            self.scroll_line_to_top(start);
+        }
+        self.selection_text()
+    }
     fn print_slow(&self) -> bool {
         self.charsets[self.gl] != Charset::Ascii || self.insert_mode || self.join_next
     }
+}
+fn truncate_chars(s: &mut String, max: usize) {
+    if let Some((i, _)) = s.char_indices().nth(max) {
+        s.truncate(i);
+    }
+}
+fn pointer_icon(name: &str) -> Option<CursorIcon> {
+    let name = name.trim();
+    let css = match name {
+        "left_ptr" | "arrow" | "top_left_arrow" => "default",
+        "xterm" | "ibeam" => "text",
+        "hand" | "hand1" | "hand2" | "pointing_hand" => "pointer",
+        "watch" => "wait",
+        "left_ptr_watch" => "progress",
+        "question_arrow" | "whats_this" => "help",
+        "cross" | "tcross" => "crosshair",
+        "fleur" | "size_all" => "move",
+        "sb_h_double_arrow" | "h_double_arrow" => "ew-resize",
+        "sb_v_double_arrow" | "v_double_arrow" => "ns-resize",
+        "top_side" => "n-resize",
+        "bottom_side" => "s-resize",
+        "left_side" => "w-resize",
+        "right_side" => "e-resize",
+        "top_left_corner" => "nw-resize",
+        "top_right_corner" => "ne-resize",
+        "bottom_left_corner" => "sw-resize",
+        "bottom_right_corner" => "se-resize",
+        "crossed_circle" | "forbidden" => "not-allowed",
+        n => n,
+    };
+    css.parse().ok()
 }
 fn is_wide(c: char) -> bool {
     unicode_width::UnicodeWidthChar::width(c) == Some(2)
@@ -1597,7 +1885,8 @@ impl Perform for Term {
         self.clear_wide_edges(self.cursor.row, col, (col + w).min(cols));
         let cell =
             Cell { ch: c, fg: self.pen.fg, bg: self.pen.bg, flags: self.pen.flags, extra: self.pen.extra };
-        self.grid.row_mut(self.cursor.row)[self.cursor.col] = cell;
+        let slot = &mut self.grid.row_mut(self.cursor.row)[self.cursor.col];
+        *slot = Cell { flags: cell.flags | (slot.flags & MARKS), ..cell };
         if w == 2 && self.cursor.col + 1 < cols {
             let spacer = Cell { ch: ' ', flags: self.pen.flags | WIDE_SPACER, ..cell };
             self.grid.row_mut(self.cursor.row)[self.cursor.col + 1] = spacer;
@@ -1635,7 +1924,7 @@ impl Perform for Term {
             let (fg, bg, fl, extra) = (self.pen.fg, self.pen.bg, self.pen.flags, self.pen.extra);
             let row = self.grid.row_mut(self.cursor.row);
             for (cell, &b) in row[col..col + n].iter_mut().zip(&s[..n]) {
-                *cell = Cell { ch: b as char, fg, bg, flags: fl, extra };
+                *cell = Cell { ch: b as char, fg, bg, flags: fl | (cell.flags & MARKS), extra };
             }
             self.last_char = Some(s[n - 1] as char);
             s = &s[n..];
@@ -1931,6 +2220,11 @@ impl Perform for Term {
             b"110" => self.fg_override = None,
             b"111" => self.bg_override = None,
             b"112" => self.cursor_override = None,
+            b"133" => self.shell_mark(rest),
+            b"9" => self.osc9(rest),
+            b"99" => self.osc99(rest),
+            b"777" => self.osc777(rest),
+            b"22" => self.osc22(rest),
             b"52" if self.osc52 => {
                 let mut it = rest.splitn(2, |&b| b == b';');
                 let sel = it.next().unwrap_or(&[]);
@@ -2461,6 +2755,126 @@ mod tests {
         feed(&mut t, "\x1b#8");
         assert_eq!(row_text(&t, 0), "EEE");
         assert_eq!(row_text(&t, 1), "EEE");
+    }
+    fn shell_session(t: &mut Term) {
+        feed(t, "\x1b]133;A\x07$ \x1b]133;B\x07ls\r\n\x1b]133;C\x07a\r\nb\r\n\r\n\x1b]133;D;0\x07");
+        feed(t, "\x1b]133;A\x07$ \x1b]133;B\x07true\r\n\x1b]133;C\x07\x1b]133;D;0\x07");
+        feed(t, "\x1b]133;A\x07$ \x1b]133;B\x07echo hi\r\n\x1b]133;C\x07hi\r\n\x1b]133;D;0\x07");
+        feed(t, "\x1b]133;A\x07$ ");
+    }
+    #[test]
+    fn osc133_marks_prompts() {
+        let mut t = Term::new(20, 4);
+        shell_session(&mut t);
+        assert_eq!(t.prompt_lines(), vec![0, 4, 5, 7]);
+        assert_eq!(t.command_outputs(), vec![(1, 2), (6, 6)]);
+        t.resize(5, 3);
+        t.resize(20, 4);
+        assert_eq!(t.prompt_lines().len(), 4);
+        assert_eq!(t.select_command_output().as_deref(), Some("hi"));
+    }
+    #[test]
+    fn osc133_marks_survive_prompt_redraw_but_not_clear() {
+        let mut t = Term::new(10, 4);
+        feed(&mut t, "out\r\n\x1b]133;A\x07\x1b[7m%\x1b[m         \r\x1b[K$ ls\r\x1b[J$ ls");
+        assert_eq!(t.prompt_lines(), vec![1]);
+        feed(&mut t, "\x1b[H\x1b[2J");
+        assert!(t.prompt_lines().is_empty());
+    }
+    #[test]
+    fn osc133_jumps_between_prompts() {
+        let mut t = Term::new(20, 4);
+        shell_session(&mut t);
+        assert_eq!(t.abs_line(0), 4);
+        assert!(t.jump_to_prompt(true));
+        assert_eq!(t.abs_line(0), 0);
+        assert!(!t.jump_to_prompt(true));
+        t.scroll_display(-1);
+        assert!(t.jump_to_prompt(true));
+        assert_eq!(t.abs_line(0), 0);
+        assert!(t.jump_to_prompt(false));
+        assert_eq!(t.abs_line(0), 4);
+        assert!(!t.jump_to_prompt(false));
+    }
+    #[test]
+    fn osc133_selects_command_output() {
+        let mut t = Term::new(20, 4);
+        shell_session(&mut t);
+        assert_eq!(t.select_command_output().as_deref(), Some("hi"));
+        assert_eq!(t.select_command_output().as_deref(), Some("a\nb"));
+        assert_eq!(t.abs_line(0), 1);
+        assert_eq!(t.select_command_output(), None);
+    }
+    #[test]
+    fn osc133_without_output_marks_uses_prompt_end() {
+        let mut t = Term::new(20, 6);
+        feed(&mut t, "\x1b]133;A\x07$ \x1b]133;B\x07ls\r\nx\r\ny\r\n\x1b]133;A\x07$ ");
+        assert_eq!(t.command_outputs(), vec![(1, 2)]);
+        let mut t = Term::new(20, 6);
+        feed(&mut t, "\x1b]133;A\x07$ ls\r\nx\r\n\x1b]133;A\x07$ ");
+        assert_eq!(t.command_outputs(), vec![(1, 1)]);
+    }
+    #[test]
+    fn osc133_ignored_on_alt_screen() {
+        let mut t = Term::new(20, 4);
+        shell_session(&mut t);
+        feed(&mut t, "\x1b[?1049h");
+        assert!(!t.jump_to_prompt(true));
+        assert!(t.command_outputs().is_empty());
+    }
+    #[test]
+    fn osc_notifications() {
+        let mut t = Term::new(20, 4);
+        feed(&mut t, "\x1b]9;build done\x07\x1b]9;4;1;50\x07\x1b]777;notify;Title;body; with semicolon\x07");
+        assert_eq!(t.notifications.len(), 2);
+        assert_eq!(t.notifications[0].title, "build done");
+        assert_eq!(t.notifications[1].title, "Title");
+        assert_eq!(t.notifications[1].body, "body; with semicolon");
+        assert!(!t.notifications[1].only_unfocused);
+    }
+    #[test]
+    fn osc99_notifications() {
+        let mut t = Term::new(20, 4);
+        feed(
+            &mut t,
+            "\x1b]99;i=1:d=0;Hel\x1b\\\x1b]99;i=1:d=0;lo\x1b\\\x1b]99;i=1:p=body:u=2:o=unfocused;world\x1b\\",
+        );
+        feed(&mut t, "\x1b]99;e=1;aGk=\x1b\\\x1b]99;p=?;\x1b\\\x1b]99;;\x1b\\");
+        assert_eq!(t.notifications.len(), 2);
+        let n = &t.notifications[0];
+        assert_eq!((n.title.as_str(), n.body.as_str()), ("Hello", "world"));
+        assert_eq!(n.urgency, Urgency::Critical);
+        assert!(n.only_unfocused);
+        assert_eq!(t.notifications[1].title, "hi");
+    }
+    #[test]
+    fn notifications_are_bounded() {
+        let mut t = Term::new(20, 4);
+        for _ in 0..100 {
+            feed(&mut t, "\x1b]9;x\x07");
+        }
+        assert_eq!(t.notifications.len(), NOTIFY_QUEUE_MAX);
+        t.notifications.clear();
+        feed(&mut t, &format!("\x1b]777;notify;{};b\x07", "t".repeat(1000)));
+        assert_eq!(t.notifications[0].title.chars().count(), NOTIFY_TITLE_MAX);
+    }
+    #[test]
+    fn osc22_pointer_shape() {
+        let mut t = Term::new(20, 4);
+        feed(&mut t, "\x1b]22;pointer\x07");
+        assert_eq!(t.pointer_shape, Some(CursorIcon::Pointer));
+        feed(&mut t, "\x1b]22;bogus\x07");
+        assert_eq!(t.pointer_shape, Some(CursorIcon::Pointer));
+        feed(&mut t, "\x1b]22;>bogus,watch\x07");
+        assert_eq!(t.pointer_shape, Some(CursorIcon::Wait));
+        feed(&mut t, "\x1b]22;<\x07");
+        assert_eq!(t.pointer_shape, Some(CursorIcon::Pointer));
+        feed(&mut t, "\x1b]22;\x07");
+        assert_eq!(t.pointer_shape, None);
+        feed(&mut t, "\x1b]22;?crosshair,bogus,__current__\x07");
+        assert_eq!(t.replies, b"\x1b]22;1,0,text\x1b\\");
+        feed(&mut t, "\x1b]22;grab\x07\x1bc");
+        assert_eq!(t.pointer_shape, None);
     }
     #[test]
     fn bell_sets_flag() {

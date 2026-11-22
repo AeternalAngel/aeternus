@@ -11,7 +11,9 @@ aeternus \- GPU-accelerated terminal emulator
 .B aeternus
 is a terminal emulator for Linux rendered on the GPU with wgpu. It runs on Wayland and X11,
 supports tabs, truecolor, wide characters, color emoji, combining marks, OSC 8 hyperlinks,
-clickable URLs and an optional cursor trail animation.
+clickable URLs, shell integration (OSC 133), desktop notifications (OSC 9, 99 and 777, shown with
+.BR notify-send (1))
+and an optional cursor trail animation.
 .SH OPTIONS
 .TP
 .BR \-c ", " \-\-config " " \fIpath\fR
@@ -60,6 +62,13 @@ Scroll the history.
 .B Ctrl+Shift+F
 Search the scrollback. Enter or Up goes to the previous match, Shift+Enter or Down to the next,
 Ctrl+Backspace clears the query and Esc closes the search bar.
+.TP
+.B Ctrl+Shift+Z / Ctrl+Shift+X
+Scroll to the previous / next shell prompt. Needs a shell that marks its prompts with OSC 133.
+.TP
+.B Ctrl+Shift+G
+Select the output of the last command and put it in the primary selection; press again for the
+command before it.
 .TP
 .B Ctrl+Shift+R
 Reload the configuration.

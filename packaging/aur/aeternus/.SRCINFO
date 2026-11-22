@@ -13,6 +13,7 @@ pkgbase = aeternus
 	depends = vulkan-icd-loader
 	optdepends = fontconfig: resolve the system monospace font
 	optdepends = xdg-utils: open links with Ctrl+click
+	optdepends = libnotify: desktop notifications from programs
 	optdepends = libx11: X11 support
 	optdepends = wayland: Wayland support
 	source = aeternus-1.4.0.tar.gz::https://github.com/AeternalAngel/aeternus/archive/refs/tags/v1.4.0.tar.gz

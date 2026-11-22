@@ -25,6 +25,9 @@ pub enum Action {
     PrevTab,
     Fullscreen,
     Find,
+    PrevPrompt,
+    NextPrompt,
+    SelectOutput,
 }
 
 impl Action {
@@ -46,6 +49,9 @@ impl Action {
             Action::PrevTab => KeyAction::PrevTab,
             Action::Fullscreen => KeyAction::Fullscreen,
             Action::Find => KeyAction::Search,
+            Action::PrevPrompt => KeyAction::PrevPrompt,
+            Action::NextPrompt => KeyAction::NextPrompt,
+            Action::SelectOutput => KeyAction::SelectOutput,
             Action::SelectAll | Action::ResetTerm | Action::Quit | Action::About => return None,
         })
     }
@@ -78,6 +84,7 @@ pub const MENUS: [(&str, &[MenuItem]); 4] = [
             item("Paste", Action::Paste),
             item("Paste Selection", Action::PastePrimary),
             item("Select All", Action::SelectAll),
+            item("Select Command Output", Action::SelectOutput),
             item("Find", Action::Find),
             SEP,
             item("Preferences", Action::Settings),
@@ -88,6 +95,8 @@ pub const MENUS: [(&str, &[MenuItem]); 4] = [
         &[
             item("Scroll to Top", Action::ScrollTop),
             item("Scroll to Bottom", Action::ScrollBottom),
+            item("Previous Prompt", Action::PrevPrompt),
+            item("Next Prompt", Action::NextPrompt),
             SEP,
             item("Zoom In", Action::ZoomIn),
             item("Zoom Out", Action::ZoomOut),

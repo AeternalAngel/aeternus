@@ -30,6 +30,7 @@ pub const TEMPLATE: &str = r##"# Aeternus configuration
 # working_directory = ""  # empty = current directory
 # osc52 = true          # let programs write to the clipboard through OSC 52
 # smart_copy_paste = false  # Ctrl+C copies when there is a selection, Ctrl+V pastes
+# notifications = true  # let programs show desktop notifications (OSC 9, 99 and 777)
 # term = ""             # TERM for the shell; empty = xterm-aeternus when installed, else xterm-256color
 
 [cursor]
@@ -87,6 +88,9 @@ pub const TEMPLATE: &str = r##"# Aeternus configuration
 # scroll_to_top = ["shift+home"]
 # scroll_to_bottom = ["shift+end"]
 # search = ["ctrl+shift+f"]
+# prev_prompt = ["ctrl+shift+z"]
+# next_prompt = ["ctrl+shift+x"]
+# select_output = ["ctrl+shift+g"]
 # new_tab = ["ctrl+shift+t"]
 # close_tab = ["ctrl+shift+w"]
 # next_tab = ["ctrl+tab", "ctrl+pagedown"]
@@ -167,6 +171,7 @@ pub struct TerminalConfig {
     pub working_directory: String,
     pub osc52: bool,
     pub smart_copy_paste: bool,
+    pub notifications: bool,
     pub term: String,
 }
 impl Default for TerminalConfig {
@@ -177,6 +182,7 @@ impl Default for TerminalConfig {
             working_directory: String::new(),
             osc52: true,
             smart_copy_paste: false,
+            notifications: true,
             term: String::new(),
         }
     }
@@ -284,6 +290,9 @@ pub struct KeybindingsConfig {
     pub scroll_to_top: Vec<String>,
     pub scroll_to_bottom: Vec<String>,
     pub search: Vec<String>,
+    pub prev_prompt: Vec<String>,
+    pub next_prompt: Vec<String>,
+    pub select_output: Vec<String>,
     pub new_tab: Vec<String>,
     pub close_tab: Vec<String>,
     pub next_tab: Vec<String>,
@@ -308,6 +317,9 @@ impl Default for KeybindingsConfig {
             scroll_to_top: v(&["shift+home"]),
             scroll_to_bottom: v(&["shift+end"]),
             search: v(&["ctrl+shift+f"]),
+            prev_prompt: v(&["ctrl+shift+z"]),
+            next_prompt: v(&["ctrl+shift+x"]),
+            select_output: v(&["ctrl+shift+g"]),
             new_tab: v(&["ctrl+shift+t"]),
             close_tab: v(&["ctrl+shift+w"]),
             next_tab: v(&["ctrl+tab", "ctrl+pagedown"]),
@@ -332,6 +344,9 @@ pub enum Action {
     ScrollToTop,
     ScrollToBottom,
     Search,
+    PrevPrompt,
+    NextPrompt,
+    SelectOutput,
     NewTab,
     CloseTab,
     NextTab,
@@ -438,7 +453,7 @@ fn add_bindings(v: &mut Vec<(KeyCombo, Action)>, list: &[String], action: Action
 impl KeybindingsConfig {
     fn build(&self) -> Keymap {
         let mut v = Vec::new();
-        let table: [(&[String], Action); 18] = [
+        let table: [(&[String], Action); 21] = [
             (&self.copy, Action::Copy),
             (&self.paste, Action::Paste),
             (&self.paste_primary, Action::PastePrimary),
@@ -451,6 +466,9 @@ impl KeybindingsConfig {
             (&self.scroll_to_top, Action::ScrollToTop),
             (&self.scroll_to_bottom, Action::ScrollToBottom),
             (&self.search, Action::Search),
+            (&self.prev_prompt, Action::PrevPrompt),
+            (&self.next_prompt, Action::NextPrompt),
+            (&self.select_output, Action::SelectOutput),
             (&self.new_tab, Action::NewTab),
             (&self.close_tab, Action::CloseTab),
             (&self.next_tab, Action::NextTab),

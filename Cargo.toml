@@ -48,7 +48,7 @@ maintainer = "Gabriel (AeternalAngel) <83485448+AeternalAngel@users.noreply.gith
 section = "x11"
 priority = "optional"
 depends = "$auto, libxkbcommon0"
-recommends = "fontconfig, libvulkan1, mesa-vulkan-drivers, xdg-utils, libwayland-client0, libx11-xcb1"
+recommends = "fontconfig, libvulkan1, mesa-vulkan-drivers, xdg-utils, libnotify-bin, libwayland-client0, libx11-xcb1"
 extended-description = """\
 Aeternus is a GPU-accelerated terminal emulator for Linux (Wayland and X11) \
 with tabs, a cursor trail, hyperlinks, a preferences panel and live config reload."""

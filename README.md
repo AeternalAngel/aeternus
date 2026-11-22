@@ -21,7 +21,9 @@
 - **Background transparency** (`window.opacity`), with solid text.
 - **Text:** truecolor, 256 colors, bold/italic/strikethrough/blink, underline styles (double, curly, dotted, dashed) and colors, wide (CJK) characters, color emoji, combining accents, skin-tone modifiers and ZWJ emoji sequences, DEC line drawing.
 - **Links:** `Ctrl+click` opens URLs and OSC 8 hyperlinks.
-- **Compatibility:** alternate screen, bracketed paste, mouse reporting (1000/1002/1003/SGR), focus events, synchronized output (2026), kitty keyboard protocol (disambiguate level), cursor shapes, OSC 4/7/8/10/11/12/52, tab stops, insert/origin modes and more.
+- **Compatibility:** alternate screen, bracketed paste, mouse reporting (1000/1002/1003/SGR), focus events, synchronized output (2026), kitty keyboard protocol (disambiguate level), cursor shapes, mouse pointer shapes (OSC 22), OSC 4/7/8/10/11/12/52, tab stops, insert/origin modes and more.
+- **Shell integration:** prompt marks (OSC 133) to jump between prompts and select a command's output.
+- **Desktop notifications** from programs (OSC 9, 99 and 777).
 - **Daily use:** 10k-line scrollback with reflow on resize and search, word/line selection, clipboard and primary selection, zoom, fullscreen, visual bell.
 - **Colors in kitty's format:** the same names as kitty (`foreground`, `selection_background`, `color0`…`color255`), kitty's default 16-color palette, and kitty `.conf` themes load directly.
 - **Text rendering** with gamma-correct blending like kitty, tunable with `text_composition_strategy` using the same gamma and contrast curve as kitty.
@@ -145,10 +147,35 @@ Use `aeternus --config <path>` to load a different file. Errors and warnings are
 | Zoom in / out / reset | `Ctrl+Shift+=` / `Ctrl+Shift+-` / `Ctrl+Shift+0`, `Ctrl+wheel` | `zoom_in`, `zoom_out`, `zoom_reset` |
 | Scroll history | `Shift+PageUp` / `Shift+PageDown` / `Shift+Home` / `Shift+End` | `scroll_page_up`, ... |
 | Search the scrollback | `Ctrl+Shift+F`; then `Enter`/`Shift+Enter` for previous/next, `Esc` to close | `search` |
+| Previous / next prompt | `Ctrl+Shift+Z` / `Ctrl+Shift+X` | `prev_prompt`, `next_prompt` |
+| Select a command's output | `Ctrl+Shift+G` (again for the one before) | `select_output` |
 | Reload config | `Ctrl+Shift+R` | `reload_config` |
 | Fullscreen | `F11` | `fullscreen` |
 | Preferences | (none) | `preferences` |
 | Open link | `Ctrl+click` (`Ctrl+Shift+click` in mouse-aware apps) | |
+
+## Shell integration
+
+Jumping between prompts and selecting a command's output need the shell to mark its prompts with OSC 133. fish 4.0 and later do it on their own. For zsh, add to `~/.zshrc`:
+
+```zsh
+autoload -Uz add-zsh-hook
+_aeternus_prompt() { print -n '\e]133;A\a' }
+_aeternus_output() { print -n '\e]133;C\a' }
+add-zsh-hook precmd _aeternus_prompt
+add-zsh-hook preexec _aeternus_output
+```
+
+For bash 4.4 or newer, add to the end of `~/.bashrc`:
+
+```bash
+PS1='\[\e]133;A\a\]'"$PS1"
+PS0=$'\e]133;C\a'
+```
+
+`Ctrl+Shift+G` selects the output of the last command, or of the last one on screen when scrolled back, and puts it in the primary selection; press it again to go one command back, and `Ctrl+Shift+C` to copy it.
+
+Programs can show desktop notifications with OSC 9, OSC 777 (`notify;title;body`) or kitty's OSC 99. They are shown with `notify-send` (from libnotify), and `notifications = false` in `[terminal]` turns them off.
 
 ## Terminfo
 

@@ -9,6 +9,7 @@ depends=('gcc-libs' 'glibc' 'libxkbcommon' 'vulkan-icd-loader')
 optdepends=(
   'fontconfig: resolve the system monospace font'
   'xdg-utils: open links with Ctrl+click'
+  'libnotify: desktop notifications from programs'
   'libx11: X11 support'
   'wayland: Wayland support'
 )

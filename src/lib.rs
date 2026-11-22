@@ -8,6 +8,7 @@ pub mod grid;
 pub mod input;
 pub mod ipc;
 pub mod log;
+pub mod notify;
 pub mod parser;
 pub mod pty;
 pub mod render;
