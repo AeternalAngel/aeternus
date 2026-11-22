@@ -53,6 +53,33 @@ impl Placement {
     pub fn covers(&self, line: isize, col: usize) -> bool {
         self.covers_line(line) && self.covers_col(col)
     }
+    fn touches(&self, l0: isize, l1: isize, c0: usize, c1: usize) -> bool {
+        self.line <= l1 && self.bottom() > l0 && self.col <= c1 && self.col + self.cols > c0
+    }
+    fn crop(&self, rows: (usize, usize), cols: (usize, usize)) -> Option<Placement> {
+        let [x, y, w, h] = self.rect;
+        let (x0, x1) = (x.max(cols.0 as f32), (x + w).min(cols.1 as f32));
+        let (y0, y1) = (y.max(rows.0 as f32), (y + h).min(rows.1 as f32));
+        if x1 <= x0 || y1 <= y0 {
+            return None;
+        }
+        let [sx, sy, sw, sh] = self.src.map(|v| v as f32);
+        let mx = |v: f32| (sx + (v - x) / w * sw).round() as u32;
+        let my = |v: f32| (sy + (v - y) / h * sh).round() as u32;
+        let (u0, u1, v0, v1) = (mx(x0), mx(x1), my(y0), my(y1));
+        if u1 <= u0 || v1 <= v0 {
+            return None;
+        }
+        Some(Placement {
+            line: self.line + rows.0 as isize,
+            col: self.col + cols.0,
+            rows: rows.1 - rows.0,
+            cols: cols.1 - cols.0,
+            rect: [x0 - cols.0 as f32, y0 - rows.0 as f32, x1 - x0, y1 - y0],
+            src: [u0, v0, u1 - u0, v1 - v0],
+            ..self.clone()
+        })
+    }
 }
 
 #[derive(Default)]
@@ -186,6 +213,36 @@ impl Graphics {
                 p.line <= bottom
             }
         });
+        self.gc();
+    }
+    pub fn erase_sixels(&mut self, l0: isize, l1: isize, c0: usize, c1: usize) {
+        let hit = |p: &Placement| p.origin == Origin::Sixel && p.touches(l0, l1, c0, c1);
+        if !self.placements.iter().any(hit) {
+            return;
+        }
+        let mut out = Vec::with_capacity(self.placements.len() + 3);
+        for p in std::mem::take(&mut self.placements) {
+            if !hit(&p) {
+                out.push(p);
+                continue;
+            }
+            let ry0 = (l0 - p.line).max(0) as usize;
+            let ry1 = ((l1 + 1 - p.line) as usize).min(p.rows);
+            let rx0 = c0.saturating_sub(p.col);
+            let rx1 = (c1 + 1 - p.col).min(p.cols);
+            let pieces = [
+                ((0, ry0), (0, p.cols)),
+                ((ry1, p.rows), (0, p.cols)),
+                ((ry0, ry1), (0, rx0)),
+                ((ry0, ry1), (rx1, p.cols)),
+            ];
+            for (rows, cols) in pieces {
+                if rows.0 < rows.1 && cols.0 < cols.1 {
+                    out.extend(p.crop(rows, cols));
+                }
+            }
+        }
+        self.placements = out;
         self.gc();
     }
     pub fn clear(&mut self) {
@@ -369,6 +426,62 @@ mod tests {
         assert_eq!(g.placements.iter().map(|p| p.id).collect::<Vec<_>>(), vec![2, 3]);
         g.shift(100, 0, 5, -5);
         assert_eq!(g.placements.iter().map(|p| p.id).collect::<Vec<_>>(), vec![3]);
+    }
+
+    fn sixel(image: u64, line: isize, col: usize, cols: usize, rows: usize) -> Placement {
+        Placement {
+            image,
+            image_id: 0,
+            id: 0,
+            origin: Origin::Sixel,
+            line,
+            col,
+            cols,
+            rows,
+            rect: [0.0, 0.0, cols as f32, rows as f32],
+            src: [0, 0, cols as u32 * 10, rows as u32 * 20],
+            z: 0,
+        }
+    }
+
+    #[test]
+    fn erasing_a_cell_splits_a_sixel_into_pieces() {
+        let mut g = Graphics::default();
+        let a = g.add_image(0, 0, 40, 60, vec![0; 40 * 60 * 4]);
+        g.place(sixel(a, 10, 5, 4, 3));
+        g.erase_sixels(11, 11, 6, 7);
+        let mut got: Vec<_> = g.placements.iter().map(|p| (p.line, p.col, p.cols, p.rows, p.src)).collect();
+        got.sort_by_key(|g| (g.0, g.1));
+        assert_eq!(
+            got,
+            vec![
+                (10, 5, 4, 1, [0, 0, 40, 20]),
+                (11, 5, 1, 1, [0, 20, 10, 20]),
+                (11, 8, 1, 1, [30, 20, 10, 20]),
+                (12, 5, 4, 1, [0, 40, 40, 20]),
+            ]
+        );
+        g.erase_sixels(0, 100, 0, 100);
+        assert!(g.is_empty());
+    }
+
+    #[test]
+    fn erasing_leaves_kitty_placements_alone() {
+        let mut g = Graphics::default();
+        let a = g.add_image(1, 0, 1, 1, vec![0; 4]);
+        g.place(placement(a, 1, 0, 0, 3));
+        g.erase_sixels(0, 5, 0, 5);
+        assert_eq!(g.placements.len(), 1);
+    }
+
+    #[test]
+    fn erasing_a_whole_row_band_keeps_top_and_bottom() {
+        let mut g = Graphics::default();
+        let a = g.add_image(0, 0, 40, 60, vec![0; 40 * 60 * 4]);
+        g.place(sixel(a, 0, 0, 4, 3));
+        g.erase_sixels(1, 1, 0, 79);
+        let rows: Vec<_> = g.placements.iter().map(|p| (p.line, p.rows, p.src[1], p.src[3])).collect();
+        assert_eq!(rows, vec![(0, 1, 0, 20), (2, 1, 40, 20)]);
     }
 
     #[test]

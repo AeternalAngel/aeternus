@@ -14,5 +14,6 @@ pub mod parser;
 pub mod pty;
 pub mod render;
 pub mod search;
+pub mod sixel;
 pub mod term;
 pub mod terminfo;

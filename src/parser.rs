@@ -6,6 +6,11 @@ pub trait Perform {
     fn osc(&mut self, data: &[u8]);
     fn dcs(&mut self, _params: &[u16], _inter: &[u8], _private: Option<u8>, _action: u8, _data: &[u8]) {}
     fn apc(&mut self, _data: &[u8]) {}
+    fn dcs_hook(&mut self, _params: &[u16], _inter: &[u8], _private: Option<u8>, _action: u8) -> bool {
+        false
+    }
+    fn dcs_put(&mut self, _data: &[u8]) {}
+    fn dcs_unhook(&mut self, _complete: bool) {}
     fn print_ascii(&mut self, s: &[u8]) {
         for &b in s {
             self.print(b as char);
@@ -25,6 +30,7 @@ enum State {
     Osc,
     DcsEntry,
     DcsPass,
+    DcsStream,
     Apc,
     StrIgnore,
     Ignore,
@@ -95,7 +101,18 @@ impl Parser {
                 State::Escape => self.escape(p, b),
                 State::Csi => self.csi(p, b),
                 State::Osc => self.osc(p, b),
-                State::DcsEntry => self.dcs_entry(b),
+                State::DcsEntry => self.dcs_entry(p, b),
+                State::DcsStream => {
+                    if matches!(b, 0x1B | 0x18 | 0x1A) {
+                        self.dcs_stream_end(p, b);
+                    } else {
+                        let start = i - 1;
+                        while i < bytes.len() && !matches!(bytes[i], 0x1B | 0x18 | 0x1A) {
+                            i += 1;
+                        }
+                        p.dcs_put(&bytes[start..i]);
+                    }
+                }
                 State::DcsPass | State::Apc => self.string_data(p, b),
                 State::StrIgnore => self.str_ignore(b),
                 State::Ignore => self.ignore(b),
@@ -249,7 +266,15 @@ impl Parser {
             }
         }
     }
-    fn dcs_entry(&mut self, b: u8) {
+    fn dcs_stream_end<P: Perform>(&mut self, p: &mut P, b: u8) {
+        p.dcs_unhook(b == 0x1B);
+        if b == 0x1B {
+            self.enter_escape();
+        } else {
+            self.state = State::Ground;
+        }
+    }
+    fn dcs_entry<P: Perform>(&mut self, p: &mut P, b: u8) {
         match b {
             b'0'..=b'9' => {
                 self.started = true;
@@ -281,7 +306,11 @@ impl Parser {
                 self.dcs_action = b;
                 self.data.clear();
                 self.data_overflow = false;
-                self.state = State::DcsPass;
+                self.state = if p.dcs_hook(&self.params, &self.inter, self.private, b) {
+                    State::DcsStream
+                } else {
+                    State::DcsPass
+                };
             }
             0x1B => self.enter_escape(),
             0x18 | 0x1A => self.state = State::Ground,
@@ -346,6 +375,10 @@ mod tests {
         dcs: Vec<Dcs>,
         apc: Vec<Vec<u8>>,
         esc: Vec<u8>,
+        stream_q: bool,
+        hooks: Vec<Vec<u16>>,
+        stream: Vec<u8>,
+        unhooks: Vec<bool>,
     }
     impl Perform for Rec {
         fn print(&mut self, c: char) {
@@ -364,6 +397,54 @@ mod tests {
         fn apc(&mut self, data: &[u8]) {
             self.apc.push(data.to_vec());
         }
+        fn dcs_hook(&mut self, params: &[u16], inter: &[u8], private: Option<u8>, action: u8) -> bool {
+            let hook = self.stream_q && action == b'q' && inter.is_empty() && private.is_none();
+            if hook {
+                self.hooks.push(params.to_vec());
+            }
+            hook
+        }
+        fn dcs_put(&mut self, data: &[u8]) {
+            self.stream.extend_from_slice(data);
+        }
+        fn dcs_unhook(&mut self, complete: bool) {
+            self.unhooks.push(complete);
+        }
+    }
+    fn run_stream(chunks: &[&[u8]]) -> Rec {
+        let mut r = Rec { stream_q: true, ..Default::default() };
+        let mut p = Parser::new();
+        for c in chunks {
+            p.advance(&mut r, c);
+        }
+        r
+    }
+    #[test]
+    fn sixel_dcs_streams_across_reads_without_a_size_limit() {
+        let body = vec![b'~'; DCS_MAX * 3];
+        let mut input = b"\x1bP0;1;0q".to_vec();
+        input.extend_from_slice(&body);
+        input.extend_from_slice(b"\x1b\\ok");
+        let chunks: Vec<&[u8]> = input.chunks(1000).collect();
+        let r = run_stream(&chunks);
+        assert_eq!(r.hooks, vec![vec![0, 1, 0]]);
+        assert_eq!(r.stream, body);
+        assert_eq!(r.unhooks, vec![true]);
+        assert_eq!(r.text, "ok");
+        assert!(r.dcs.is_empty());
+    }
+    #[test]
+    fn cancelled_sixel_is_unhooked_as_incomplete() {
+        let r = run_stream(&[b"\x1bPq#1~~\x18ok"]);
+        assert_eq!(r.stream, b"#1~~");
+        assert_eq!(r.unhooks, vec![false]);
+        assert_eq!(r.text, "ok");
+    }
+    #[test]
+    fn other_dcs_strings_are_not_streamed() {
+        let r = run_stream(&[b"\x1bP+q544e\x1b\\\x1bP$qm\x1b\\"]);
+        assert!(r.hooks.is_empty());
+        assert_eq!(r.dcs.len(), 2);
     }
     fn run(input: &[u8]) -> Rec {
         let mut r = Rec::default();

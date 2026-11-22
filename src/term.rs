@@ -13,6 +13,7 @@ use crate::terminfo::{self, Cap};
 use winit::window::CursorIcon;
 
 mod kitty;
+mod sixel;
 
 const SCROLLBACK_LINES: usize = 10_000;
 pub const SYNC_TIMEOUT: Duration = Duration::from_millis(150);
@@ -249,6 +250,8 @@ pub struct Term {
     saved_graphics: Option<Graphics>,
     kitty_pending: Option<kitty::Pending>,
     image_quota: usize,
+    sixel: Option<Box<crate::sixel::Decoder>>,
+    sixel_display_mode: bool,
 }
 fn default_tabs(cols: usize) -> Vec<bool> {
     (0..cols).map(|c| c > 0 && c % 8 == 0).collect()
@@ -321,6 +324,8 @@ impl Term {
             saved_graphics: None,
             kitty_pending: None,
             image_quota: QUOTA,
+            sixel: None,
+            sixel_display_mode: false,
         }
     }
     pub fn apply_config(&mut self, cfg: &Config) {
@@ -995,6 +1000,8 @@ impl Term {
         let (cols, rows) = (self.cols(), self.rows());
         match mode {
             0 => {
+                self.erase_sixels(r, r, c, cols - 1);
+                self.erase_sixels(r + 1, rows, 0, cols - 1);
                 self.clear_wide_edges(r, c, cols);
                 self.fill_keep_marks(r, c, cols, b);
                 for i in (r + 1)..rows {
@@ -1002,6 +1009,10 @@ impl Term {
                 }
             }
             1 => {
+                if r > 0 {
+                    self.erase_sixels(0, r - 1, 0, cols - 1);
+                }
+                self.erase_sixels(r, r, 0, c);
                 for i in 0..r {
                     self.grid.fill(i, 0, cols, b);
                 }
@@ -1029,6 +1040,12 @@ impl Term {
         let b = self.blank();
         let (r, c, cols) = (self.cursor.row, self.cursor.col, self.cols());
         match mode {
+            0 => self.erase_sixels(r, r, c, cols - 1),
+            1 => self.erase_sixels(r, r, 0, c),
+            2 => self.erase_sixels(r, r, 0, cols - 1),
+            _ => {}
+        }
+        match mode {
             0 => {
                 self.clear_wide_edges(r, c, cols);
                 self.fill_keep_marks(r, c, cols, b);
@@ -1044,6 +1061,7 @@ impl Term {
     fn insert_lines(&mut self, n: usize) {
         let r = self.cursor.row;
         if r >= self.scroll_top && r <= self.scroll_bottom {
+            self.erase_sixels(r, self.scroll_bottom, 0, self.cols() - 1);
             let b = self.blank();
             self.grid.scroll_down(r, self.scroll_bottom, n, b);
             let n = n.min(self.scroll_bottom + 1 - r);
@@ -1055,6 +1073,7 @@ impl Term {
     fn delete_lines(&mut self, n: usize) {
         let r = self.cursor.row;
         if r >= self.scroll_top && r <= self.scroll_bottom {
+            self.erase_sixels(r, self.scroll_bottom, 0, self.cols() - 1);
             let b = self.blank();
             self.grid.scroll_up(r, self.scroll_bottom, n, b);
             let n = n.min(self.scroll_bottom + 1 - r);
@@ -1066,6 +1085,7 @@ impl Term {
     fn insert_chars(&mut self, n: usize) {
         let b = self.blank();
         let (r, c, cols) = (self.cursor.row, self.cursor.col, self.cols());
+        self.erase_sixels(r, r, c, cols - 1);
         let n = n.min(cols - c);
         let row = self.grid.row_mut(r);
         if c > 0 && row[c].flags & WIDE_SPACER != 0 {
@@ -1083,6 +1103,7 @@ impl Term {
     fn delete_chars(&mut self, n: usize) {
         let b = self.blank();
         let (r, c, cols) = (self.cursor.row, self.cursor.col, self.cols());
+        self.erase_sixels(r, r, c, cols - 1);
         let n = n.min(cols - c);
         self.clear_wide_edges(r, c, c + n);
         let row = self.grid.row_mut(r);
@@ -1094,11 +1115,13 @@ impl Term {
         let b = self.blank();
         let (r, c, cols) = (self.cursor.row, self.cursor.col, self.cols());
         let end = (c + n).min(cols);
+        self.erase_sixels(r, r, c, end - 1);
         self.clear_wide_edges(r, c, end);
         self.grid.fill(r, c, end, b);
     }
     fn screen_alignment(&mut self) {
         let e = Cell { ch: 'E', ..Cell::BLANK };
+        self.erase_sixels(0, self.rows() - 1, 0, self.cols() - 1);
         for r in 0..self.rows() {
             self.grid.row_mut(r).fill(e);
         }
@@ -1186,6 +1209,7 @@ impl Term {
                 12 => self.cursor_blink = on,
                 25 => self.cursor_visible = on,
                 47 | 1047 => self.set_alt_screen(on, false),
+                80 => self.sixel_display_mode = on,
                 1000 => self.set_mouse(MouseMode::Click, on),
                 1002 => self.set_mouse(MouseMode::Drag, on),
                 1003 => self.set_mouse(MouseMode::Motion, on),
@@ -1221,6 +1245,7 @@ impl Term {
             12 => Some(self.cursor_blink),
             25 => Some(self.cursor_visible),
             47 | 1047 => Some(self.main_grid.is_some()),
+            80 => Some(self.sixel_display_mode),
             1000 => Some(self.mouse_mode == MouseMode::Click),
             1002 => Some(self.mouse_mode == MouseMode::Drag),
             1003 => Some(self.mouse_mode == MouseMode::Motion),
@@ -2067,6 +2092,7 @@ impl Perform for Term {
             self.insert_chars(w);
         }
         let col = self.cursor.col;
+        self.erase_sixels(self.cursor.row, self.cursor.row, col, (col + w).min(cols) - 1);
         self.clear_wide_edges(self.cursor.row, col, (col + w).min(cols));
         let cell =
             Cell { ch: c, fg: self.pen.fg, bg: self.pen.bg, flags: self.pen.flags, extra: self.pen.extra };
@@ -2105,6 +2131,7 @@ impl Perform for Term {
             }
             let col = self.cursor.col;
             let n = s.len().min(cols - col);
+            self.erase_sixels(self.cursor.row, self.cursor.row, col, col + n - 1);
             self.clear_wide_edges(self.cursor.row, col, col + n);
             let (fg, bg, fl, extra) = (self.pen.fg, self.pen.bg, self.pen.flags, self.pen.extra);
             let row = self.grid.row_mut(self.cursor.row);
@@ -2192,6 +2219,7 @@ impl Perform for Term {
                 self.reply(concat!("\x1bP>|aeternus ", env!("CARGO_PKG_VERSION"), "\x1b\\"))
             }
             (Some(pv @ (b'?' | b'>' | b'<' | b'=')), b'u') => self.kitty_keyboard(pv, params),
+            (Some(b'?'), b'S') => self.xtsmgraphics(params),
             (Some(_), _) => {}
             (None, b'A') => {
                 let top = if row >= self.scroll_top { self.scroll_top } else { 0 };
@@ -2264,7 +2292,7 @@ impl Perform for Term {
             }
             (None, b's') => self.save_cursor(),
             (None, b'u') => self.restore_cursor(),
-            (None, b'c') if first == 0 => self.reply("\x1b[?62;22c"),
+            (None, b'c') if first == 0 => self.reply("\x1b[?62;4;22c"),
             (None, b'n') => match first {
                 5 => self.reply("\x1b[0n"),
                 6 => {
@@ -2313,7 +2341,7 @@ impl Perform for Term {
                 b'M' => self.reverse_index(),
                 b'=' => self.app_keypad = true,
                 b'>' => self.app_keypad = false,
-                b'Z' => self.reply("\x1b[?62;22c"),
+                b'Z' => self.reply("\x1b[?62;4;22c"),
                 b'c' => self.reset(),
                 b'n' => self.gl = 0,
                 _ => {}
@@ -2333,6 +2361,19 @@ impl Perform for Term {
     }
     fn apc(&mut self, data: &[u8]) {
         self.kitty_apc(data);
+    }
+    fn dcs_hook(&mut self, params: &[u16], inter: &[u8], private: Option<u8>, action: u8) -> bool {
+        if action != b'q' || !inter.is_empty() || private.is_some() {
+            return false;
+        }
+        self.sixel_start(params);
+        true
+    }
+    fn dcs_put(&mut self, data: &[u8]) {
+        self.sixel_put(data);
+    }
+    fn dcs_unhook(&mut self, complete: bool) {
+        self.sixel_end(complete);
     }
     fn osc(&mut self, data: &[u8]) {
         let mut top = data.splitn(2, |&b| b == b';');
