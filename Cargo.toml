@@ -106,3 +106,6 @@ assets = [
 
 [package.metadata.generate-rpm.requires]
 libxkbcommon = "*"
+
+[package.metadata.generate-rpm.recommends]
+libnotify = "*"
