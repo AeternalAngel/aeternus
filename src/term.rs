@@ -6,7 +6,7 @@ use serde::Deserialize;
 use crate::cell::{flags, Cell, Color};
 use crate::colors::{DEFAULT_BG, DEFAULT_FG};
 use crate::config::Config;
-use crate::graphics::{Graphics, QUOTA};
+use crate::graphics::{Graphics, Image, Placement, QUOTA};
 use crate::grid::Grid;
 use crate::parser::Perform;
 use crate::terminfo::{self, Cap};
@@ -430,6 +430,15 @@ impl Term {
         let changed = self.display_offset != 0;
         self.display_offset = 0;
         changed
+    }
+    pub fn visible_images(&self) -> impl Iterator<Item = (isize, &Placement, &Image)> {
+        let top = self.abs_line(0) as isize;
+        let rows = self.rows() as isize;
+        let g = &self.graphics;
+        g.placements
+            .iter()
+            .filter(move |p| p.bottom() > top && p.line < top + rows)
+            .filter_map(move |p| g.image(p.image).map(|i| (p.line - top, p, i)))
     }
     pub fn abs_line(&self, row: usize) -> usize {
         self.popped + self.scrollback.len().saturating_sub(self.display_offset) + row

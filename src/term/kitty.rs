@@ -663,6 +663,20 @@ mod tests {
     }
 
     #[test]
+    fn visible_images_follow_the_viewport() {
+        let mut t = term();
+        feed(&mut t, &apc("a=T,f=24,s=10,v=40,i=1,C=1", &[0; 1200]));
+        feed(&mut t, &b"\n".repeat(30));
+        assert_eq!(t.visible_images().count(), 0);
+        t.scroll_display(20);
+        let rows: Vec<_> = t.visible_images().map(|(r, p, _)| (r, p.id)).collect();
+        assert_eq!(rows, vec![(-1, 0)]);
+        t.scroll_display(1);
+        let rows: Vec<_> = t.visible_images().map(|(r, ..)| r).collect();
+        assert_eq!(rows, vec![0]);
+    }
+
+    #[test]
     fn images_scroll_with_regions_and_line_ops() {
         let mut t = term();
         feed(&mut t, &apc("a=t,f=24,s=10,v=20,i=1", &[0; 600]));

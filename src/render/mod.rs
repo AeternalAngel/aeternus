@@ -1,3 +1,4 @@
+mod images;
 mod settings;
 mod sprite;
 pub mod trail;
@@ -17,10 +18,12 @@ use winit::window::Window;
 use crate::cell::{flags, Cell};
 use crate::colors::Palette;
 use crate::config::{Config, TextComposition};
+use crate::graphics::BELOW_BG;
 use crate::log;
 use crate::search::Search;
 use crate::term::{CursorShape, Term, WIDE_SPACER};
 
+use images::ImageCache;
 pub use settings::SettingsOutcome;
 use settings::SettingsState;
 use trail::{Trail, TrailConfig};
@@ -330,7 +333,14 @@ pub struct Renderer {
     linear_pipelines: Option<(wgpu::TextureFormat, Pipelines)>,
     composition: TextComposition,
     bind_group: wgpu::BindGroup,
+    bind_layout: wgpu::BindGroupLayout,
     globals: wgpu::Buffer,
+    images: ImageCache,
+    img_inst: Vec<Instance>,
+    img_draws: Vec<(u64, i32)>,
+    fg_split: usize,
+    mid_inst: Vec<Instance>,
+    grid_clip: [u32; 4],
     inst_buf: wgpu::Buffer,
     inst_cap: usize,
     poly_buf: wgpu::Buffer,
@@ -596,6 +606,7 @@ impl Renderer {
         let font_size = cfg.font.size * scale;
         let cell_h = (font_size * cfg.font.line_height).round().max(1.0);
         let cell_w = measure_cell_width(&mut font_system, &font_family, font_size, cell_h).round().max(1.0);
+        let images = ImageCache::new(&device);
         let mut r = Self {
             surface,
             device,
@@ -605,7 +616,14 @@ impl Renderer {
             linear_pipelines,
             composition: cfg.text_composition,
             bind_group,
+            images,
+            bind_layout: bgl,
             globals,
+            img_inst: Vec::new(),
+            img_draws: Vec::new(),
+            fg_split: 0,
+            mid_inst: Vec::new(),
+            grid_clip: [0; 4],
             inst_buf,
             inst_cap,
             poly_buf,
@@ -1023,6 +1041,45 @@ impl Renderer {
         let cols = term.cols();
         self.push_toolbar(&mut bgs, &mut fgs, pal.bg, pal.fg, thick);
         let top = pad + self.top_inset();
+        self.img_inst.clear();
+        self.img_draws.clear();
+        self.images.begin_frame();
+        let mut covered: Vec<(usize, usize, usize, bool)> = Vec::new();
+        let mut visible: Vec<_> = term.visible_images().collect();
+        visible.sort_by_key(|(_, p, _)| (p.z, p.image_id));
+        for (row, p, img) in visible {
+            self.images.ensure(&self.device, &self.queue, &self.bind_layout, &self.globals, img);
+            let (iw, ih) = (img.width as f32, img.height as f32);
+            self.img_inst.push(Instance {
+                pos: [pad + (p.col as f32 + p.rect[0]) * cw, top + (row as f32 + p.rect[1]) * ch],
+                size: [p.rect[2] * cw, p.rect[3] * ch],
+                uv_pos: [p.src[0] as f32 / iw, p.src[1] as f32 / ih],
+                uv_size: [p.src[2] as f32 / iw, p.src[3] as f32 / ih],
+                color: [1.0; 4],
+                color_glyph: 1.0,
+                under: [0.0; 3],
+            });
+            self.img_draws.push((img.uid, p.z));
+            if p.z >= BELOW_BG {
+                let first = (row + p.rect[1].floor() as isize).max(0) as usize;
+                let last =
+                    (row + (p.rect[1] + p.rect[3]).ceil() as isize).clamp(0, term.rows() as isize) as usize;
+                let c0 = p.col + p.rect[0].floor() as usize;
+                let c1 = p.col + ((p.rect[0] + p.rect[2]).ceil() as usize).max(1) - 1;
+                for r in first..last {
+                    covered.push((r, c0, c1, p.z >= 0));
+                }
+            }
+        }
+        self.images.end_frame();
+        let gx = pad.max(0.0) as u32;
+        let gy = top.max(0.0) as u32;
+        let gw = ((cols as f32 * cw) as u32).min(self.config.width.saturating_sub(gx));
+        let gh = ((term.rows() as f32 * ch) as u32).min(self.config.height.saturating_sub(gy));
+        self.grid_clip = [gx, gy, gw, gh];
+        let mut overlay: Vec<Instance> = Vec::new();
+        let mut mid = std::mem::take(&mut self.mid_inst);
+        mid.clear();
         let sel = term.selection_bounds();
         let cursor_shown = term.cursor_visible && term.display_offset == 0;
         let cursor_vis = cursor_shown && (!view.focused || !term.cursor_blink || view.blink_on);
@@ -1066,6 +1123,15 @@ impl Renderer {
                 if cell == Cell::BLANK && !selected && !at_cursor && hit.is_none() {
                     continue;
                 }
+                let under_image = if covered.is_empty() {
+                    None
+                } else {
+                    (covered.iter())
+                        .filter(|&&(cr, c0, c1, _)| cr == r && c >= c0 && c <= c1)
+                        .map(|&(.., top)| top)
+                        .reduce(|a, b| a || b)
+                };
+                let marks = (bgs.len(), fgs.len());
                 let is_spacer = cell.flags & WIDE_SPACER != 0;
                 if is_spacer && c > 0 && !at_cursor {
                     continue;
@@ -1164,8 +1230,26 @@ impl Renderer {
                         fgs.push(Instance::rect(x, y, thick * 2.0, ch, pal.cursor));
                     }
                 }
+                if let Some(top) = under_image {
+                    let layer = if top { &mut overlay } else { &mut mid };
+                    if at_cursor {
+                        layer.extend_from_slice(&bgs[marks.0..]);
+                        if top {
+                            layer.extend_from_slice(&fgs[marks.1..]);
+                        }
+                    } else if hit == Some(true) {
+                        layer.push(Instance::rect_alpha(x, y, w, ch, current_bg, 0.5));
+                    } else if selected {
+                        layer.push(Instance::rect_alpha(x, y, w, ch, pal.selection, 0.5));
+                    } else if hit.is_some() {
+                        layer.push(Instance::rect_alpha(x, y, w, ch, match_bg, 0.5));
+                    }
+                }
             }
         }
+        self.fg_split = fgs.len();
+        fgs.append(&mut overlay);
+        self.mid_inst = mid;
         let now = Instant::now();
         let target = if cursor_shown && self.settings.is_none() {
             let (r, c) = (term.cursor.row, term.cursor.col);
@@ -1230,14 +1314,23 @@ impl Renderer {
             .texture
             .create_view(&wgpu::TextureViewDescriptor { format: view_format, ..Default::default() });
         let n_bg = self.bg_inst.len();
-        let n = n_bg + self.fg_inst.len();
-        if n > self.inst_cap {
-            self.inst_cap = n.next_power_of_two();
+        let n_fg = n_bg + self.fg_inst.len();
+        let n = n_fg + self.mid_inst.len();
+        let total = n + self.img_inst.len();
+        if total > self.inst_cap {
+            self.inst_cap = total.next_power_of_two();
             self.inst_buf = Self::make_inst_buf(&self.device, self.inst_cap);
         }
         let isz = std::mem::size_of::<Instance>() as u64;
         self.queue.write_buffer(&self.inst_buf, 0, bytemuck::cast_slice(&self.bg_inst));
         self.queue.write_buffer(&self.inst_buf, n_bg as u64 * isz, bytemuck::cast_slice(&self.fg_inst));
+        if !self.mid_inst.is_empty() {
+            self.queue.write_buffer(&self.inst_buf, n_fg as u64 * isz, bytemuck::cast_slice(&self.mid_inst));
+        }
+        if !self.img_inst.is_empty() {
+            self.queue.write_buffer(&self.inst_buf, n as u64 * isz, bytemuck::cast_slice(&self.img_inst));
+        }
+        let split = n_bg + self.fg_split.min(self.fg_inst.len());
         let n_poly = self.poly.len().min(64);
         if n_poly > 0 {
             self.queue.write_buffer(&self.poly_buf, 0, bytemuck::cast_slice(&self.poly[..n_poly]));
@@ -1274,24 +1367,54 @@ impl Renderer {
                 multiview_mask: None,
             });
             pass.set_bind_group(0, &self.bind_group, &[]);
+            pass.set_pipeline(&pipes.main);
+            pass.set_vertex_buffer(0, self.inst_buf.slice(..));
+            self.draw_images(&mut pass, n, |z| z < BELOW_BG);
             if n_bg > 0 {
-                pass.set_pipeline(&pipes.main);
-                pass.set_vertex_buffer(0, self.inst_buf.slice(..));
                 pass.draw(0..4, 0..n_bg as u32);
             }
             if n_poly > 0 {
                 pass.set_pipeline(&pipes.poly);
                 pass.set_vertex_buffer(0, self.poly_buf.slice(..));
                 pass.draw(0..n_poly as u32, 0..1);
-            }
-            if n > n_bg {
                 pass.set_pipeline(&pipes.main);
                 pass.set_vertex_buffer(0, self.inst_buf.slice(..));
-                pass.draw(0..4, n_bg as u32..n as u32);
+            }
+            self.draw_images(&mut pass, n, |z| (BELOW_BG..0).contains(&z));
+            if n > n_fg {
+                pass.draw(0..4, n_fg as u32..n as u32);
+            }
+            if split > n_bg {
+                pass.draw(0..4, n_bg as u32..split as u32);
+            }
+            self.draw_images(&mut pass, n, |z| z >= 0);
+            if n_fg > split {
+                pass.draw(0..4, split as u32..n_fg as u32);
             }
         }
         self.queue.submit(Some(enc.finish()));
         self.queue.present(frame);
+    }
+}
+impl Renderer {
+    fn draw_images(&self, pass: &mut wgpu::RenderPass<'_>, base: usize, layer: impl Fn(i32) -> bool) {
+        let [x, y, w, h] = self.grid_clip;
+        if w == 0 || h == 0 || !self.img_draws.iter().any(|&(_, z)| layer(z)) {
+            return;
+        }
+        pass.set_scissor_rect(x, y, w, h);
+        for (k, &(uid, z)) in self.img_draws.iter().enumerate() {
+            if !layer(z) {
+                continue;
+            }
+            if let Some(bg) = self.images.bind_group(uid) {
+                pass.set_bind_group(0, bg, &[]);
+                let i = (base + k) as u32;
+                pass.draw(0..4, i..i + 1);
+            }
+        }
+        pass.set_scissor_rect(0, 0, self.config.width, self.config.height);
+        pass.set_bind_group(0, &self.bind_group, &[]);
     }
 }
 fn pick_alpha_mode(modes: &[wgpu::CompositeAlphaMode], opacity: f32) -> wgpu::CompositeAlphaMode {
