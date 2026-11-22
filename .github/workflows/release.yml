@@ -178,6 +178,7 @@ jobs:
           echo "pre=$PRE" >> "$GITHUB_OUTPUT"
       - uses: softprops/action-gh-release@v2
         with:
+          token: ${{ secrets.RELEASE_TOKEN }}
           name: Aeternus ${{ steps.ver.outputs.short }}
           prerelease: ${{ steps.ver.outputs.pre }}
           body_path: notes.md
