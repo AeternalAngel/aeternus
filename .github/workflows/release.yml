@@ -73,7 +73,8 @@ jobs:
       - name: RPM package
         run: |
           cargo install cargo-generate-rpm --locked
-          cargo generate-rpm --output dist/
+          V=$(grep -m1 '^version' Cargo.toml | cut -d'"' -f2)
+          cargo generate-rpm --output dist/ -s "version = \"${V//-/\~}\""
       - name: AppImage
         run: |
           A=${{ matrix.arch }}
