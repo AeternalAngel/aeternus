@@ -420,6 +420,14 @@ mod tests {
     }
 
     #[test]
+    fn unchunked_image_larger_than_a_chunk() {
+        let mut t = term();
+        let r = feed(&mut t, &apc("a=T,f=32,s=64,v=64,i=2", &rgba(64, 64)));
+        assert_eq!(r, "\x1b_Gi=2;OK\x1b\\");
+        assert_eq!(t.graphics.by_id(2).unwrap().rgba.len(), 64 * 64 * 4);
+    }
+
+    #[test]
     fn transmit_only_does_not_place() {
         let mut t = term();
         assert_eq!(feed(&mut t, &apc("a=t,f=24,s=2,v=2,i=4", &[0; 12])), "\x1b_Gi=4;OK\x1b\\");

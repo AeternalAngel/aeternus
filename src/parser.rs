@@ -15,7 +15,8 @@ pub trait Perform {
 const OSC_MAX: usize = 4096;
 const OSC52_MAX: usize = 4 * ((1 << 20) + 2) / 3 + 64;
 pub const DCS_MAX: usize = 4096;
-pub const APC_MAX: usize = 8192;
+pub const APC_MAX: usize = crate::graphics::QUOTA.div_ceil(3) * 4 + 4096;
+const DATA_KEEP: usize = 1 << 16;
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum State {
     Ground,
@@ -42,6 +43,7 @@ pub struct Parser {
     dcs_action: u8,
     data: Vec<u8>,
     data_overflow: bool,
+    apc_max: usize,
     utf8: [u8; 4],
     utf8_len: usize,
     utf8_need: usize,
@@ -67,6 +69,7 @@ impl Parser {
             dcs_action: 0,
             data: Vec::new(),
             data_overflow: false,
+            apc_max: APC_MAX,
             utf8: [0; 4],
             utf8_len: 0,
             utf8_need: 0,
@@ -295,11 +298,19 @@ impl Parser {
                         p.dcs(&self.params, &self.inter, self.private, self.dcs_action, &self.data);
                     }
                 }
+                if self.data.capacity() > DATA_KEEP {
+                    self.data = Vec::new();
+                }
                 self.enter_escape();
             }
-            0x18 | 0x1A => self.state = State::Ground,
+            0x18 | 0x1A => {
+                if self.data.capacity() > DATA_KEEP {
+                    self.data = Vec::new();
+                }
+                self.state = State::Ground;
+            }
             _ => {
-                let max = if self.state == State::Apc { APC_MAX } else { DCS_MAX };
+                let max = if self.state == State::Apc { self.apc_max } else { DCS_MAX };
                 if self.data.len() < max {
                     self.data.push(b);
                 } else {
@@ -426,11 +437,28 @@ mod tests {
         assert_eq!(r.apc, vec![b"Gf=24,a=T;AAAA".to_vec()]);
         assert_eq!(r.text, "ok");
         let mut input = b"\x1b_G".to_vec();
-        input.extend(std::iter::repeat_n(b'A', APC_MAX + 1));
+        input.extend(std::iter::repeat_n(b'A', 99));
         input.extend(b"\x1b\\ok");
-        let r = run(&input);
-        assert!(r.apc.is_empty());
-        assert_eq!(r.text, "ok");
+        let mut r = Rec::default();
+        let mut p = Parser::new();
+        p.apc_max = 100;
+        p.advance(&mut r, &input);
+        assert_eq!(r.apc.len(), 1);
+        input.insert(3, b'A');
+        p.advance(&mut r, &input);
+        assert_eq!(r.apc.len(), 1);
+        assert_eq!(r.text, "okok");
+    }
+    #[test]
+    fn large_apc_fits_an_unchunked_image_and_frees_its_buffer() {
+        let mut input = b"\x1b_G".to_vec();
+        input.extend(std::iter::repeat_n(b'A', 1 << 20));
+        input.extend(b"\x1b\\");
+        let mut r = Rec::default();
+        let mut p = Parser::new();
+        p.advance(&mut r, &input);
+        assert_eq!(r.apc[0].len(), (1 << 20) + 1);
+        assert!(p.data.capacity() <= DATA_KEEP);
     }
     #[test]
     fn utf8_in_dcs_and_apc_arrives_whole() {
