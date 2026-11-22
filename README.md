@@ -5,7 +5,7 @@
   <p>A GPU-accelerated terminal emulator for Linux, written in Rust (winit + wgpu).</p>
 
   <a href="https://github.com/AeternalAngel/aeternus/actions/workflows/ci.yml"><img src="https://github.com/AeternalAngel/aeternus/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
-  <a href="https://github.com/AeternalAngel/aeternus/releases"><img src="https://img.shields.io/github/v/release/AeternalAngel/aeternus?include_prereleases&sort=semver" alt="Release"></a>
+  <a href="https://github.com/AeternalAngel/aeternus/releases"><img src="https://img.shields.io/github/v/release/AeternalAngel/aeternus?sort=semver" alt="Release"></a>
   <a href="LICENSE"><img src="https://img.shields.io/github/license/AeternalAngel/aeternus" alt="MIT License"></a>
 </div>
 
