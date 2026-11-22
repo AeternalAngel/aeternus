@@ -6,6 +6,12 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+## [1.6-pre2] - 2026-11-22
+
+### Fixed
+
+- Pasting could freeze the window, which then stopped drawing and ignored close requests, when the program in the terminal took a while to read the pasted text (for example zsh with syntax highlighting on a long paste). Input is now written to the terminal from a separate thread, so the window stays responsive.
+
 ## [1.6-pre1] - 2026-11-22
 
 ### Added
@@ -189,7 +195,8 @@ All notable changes to this project are documented here. The format is based on
 
 Initial Windows support.
 
-[Unreleased]: https://github.com/AeternalAngel/aeternus/compare/v1.6.0-pre1...HEAD
+[Unreleased]: https://github.com/AeternalAngel/aeternus/compare/v1.6.0-pre2...HEAD
+[1.6-pre2]: https://github.com/AeternalAngel/aeternus/compare/v1.6.0-pre1...v1.6.0-pre2
 [1.6-pre1]: https://github.com/AeternalAngel/aeternus/compare/v1.5.0...v1.6.0-pre1
 [1.5]: https://github.com/AeternalAngel/aeternus/compare/v1.4.2...v1.5.0
 [1.4.2]: https://github.com/AeternalAngel/aeternus/compare/v1.4.1...v1.4.2
