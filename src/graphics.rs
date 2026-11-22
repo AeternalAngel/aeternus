@@ -231,10 +231,10 @@ pub fn inflate(data: &[u8], limit: usize) -> Option<Vec<u8>> {
 
 pub fn check_size(w: u32, h: u32) -> Result<(), &'static str> {
     if w == 0 || h == 0 {
-        return Err("EINVAL:Zero width/height not allowed");
+        return Err("EINVAL:width and height must be positive");
     }
     if w > MAX_SIZE || h > MAX_SIZE || w as usize * h as usize * 4 > QUOTA {
-        return Err("EFBIG:Image too large");
+        return Err("EFBIG:image exceeds the size limit");
     }
     Ok(())
 }
@@ -243,7 +243,7 @@ pub fn raw_to_rgba(data: &[u8], w: u32, h: u32, bpp: usize) -> Result<Vec<u8>, &
     check_size(w, h)?;
     let n = w as usize * h as usize;
     if data.len() < n * bpp {
-        return Err("ENODATA:Insufficient image data");
+        return Err("ENODATA:not enough pixel data for the given size");
     }
     let data = &data[..n * bpp];
     if bpp == 4 {
@@ -257,7 +257,7 @@ pub fn raw_to_rgba(data: &[u8], w: u32, h: u32, bpp: usize) -> Result<Vec<u8>, &
 }
 
 pub fn decode_png(data: &[u8]) -> Result<(u32, u32, Vec<u8>), &'static str> {
-    const BAD: &str = "EBADPNG:Failed to decode PNG";
+    const BAD: &str = "EBADPNG:could not decode the PNG data";
     let mut dec = png::Decoder::new_with_limits(Cursor::new(data), png::Limits { bytes: QUOTA * 2 });
     let (w, h) = dec.read_header_info().map_err(|_| BAD)?.size();
     check_size(w, h)?;
@@ -384,9 +384,9 @@ mod tests {
     #[test]
     fn raw_formats() {
         assert_eq!(raw_to_rgba(&[1, 2, 3, 4, 5, 6], 2, 1, 3).unwrap(), vec![1, 2, 3, 255, 4, 5, 6, 255]);
-        assert_eq!(raw_to_rgba(&[1, 2, 3], 2, 1, 3), Err("ENODATA:Insufficient image data"));
-        assert_eq!(raw_to_rgba(&[], 0, 1, 4), Err("EINVAL:Zero width/height not allowed"));
-        assert_eq!(raw_to_rgba(&[], MAX_SIZE + 1, 1, 4), Err("EFBIG:Image too large"));
+        assert_eq!(raw_to_rgba(&[1, 2, 3], 2, 1, 3), Err("ENODATA:not enough pixel data for the given size"));
+        assert_eq!(raw_to_rgba(&[], 0, 1, 4), Err("EINVAL:width and height must be positive"));
+        assert_eq!(raw_to_rgba(&[], MAX_SIZE + 1, 1, 4), Err("EFBIG:image exceeds the size limit"));
     }
 
     #[test]

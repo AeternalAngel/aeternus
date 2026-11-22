@@ -118,19 +118,19 @@ impl Command {
     }
     fn check_transmit(&self) -> Result<(), &'static str> {
         if self.invalid {
-            return Err("EINVAL:Malformed control data");
+            return Err("EINVAL:malformed control data");
         }
         if self.id != 0 && self.number != 0 {
-            return Err("EINVAL:Must not specify both image id and image number");
+            return Err("EINVAL:i and I cannot be used together");
         }
         if self.medium != b'd' {
-            return Err("EINVAL:Unsupported transmission medium");
+            return Err("EINVAL:unsupported transmission medium");
         }
         if !matches!(self.format, 24 | 32 | 100) {
-            return Err("EINVAL:Unsupported format");
+            return Err("EINVAL:unsupported format");
         }
         if self.compression != 0 && self.compression != b'z' {
-            return Err("EINVAL:Unsupported compression");
+            return Err("EINVAL:unsupported compression");
         }
         if self.action == b'T' {
             self.check_place()?;
@@ -139,10 +139,10 @@ impl Command {
     }
     fn check_place(&self) -> Result<(), &'static str> {
         if self.unicode {
-            return Err("EINVAL:Unicode placeholders not supported");
+            return Err("EINVAL:Unicode placeholders are not supported");
         }
         if self.relative {
-            return Err("EINVAL:Relative placements not supported");
+            return Err("EINVAL:relative placements are not supported");
         }
         Ok(())
     }
@@ -153,7 +153,7 @@ impl Command {
                 32 => self.width as usize * self.height as usize * 4,
                 _ => QUOTA,
             };
-            inflate(&data, limit.min(QUOTA)).ok_or("EINVAL:Failed to decompress image data")?
+            inflate(&data, limit.min(QUOTA)).ok_or("EINVAL:could not decompress the data")?
         } else {
             data
         };
@@ -182,11 +182,11 @@ impl Term {
                     match base64_decode(payload) {
                         Some(d) if p.data.len() + d.len() <= self.image_quota => p.data.extend_from_slice(&d),
                         Some(_) => {
-                            self.kitty_fail(&p.cmd, "EFBIG:Image too large");
+                            self.kitty_fail(&p.cmd, "EFBIG:image exceeds the size limit");
                             p.failed = true;
                         }
                         None => {
-                            self.kitty_fail(&p.cmd, "EINVAL:Invalid base64 data");
+                            self.kitty_fail(&p.cmd, "EINVAL:invalid base64 payload");
                             p.failed = true;
                         }
                     }
@@ -203,13 +203,13 @@ impl Term {
             b't' | b'T' | b'q' => self.kitty_transmit(cmd, payload),
             b'p' => self.kitty_put(&cmd),
             b'd' => self.kitty_delete(&cmd),
-            b'f' | b'a' | b'c' => self.kitty_fail(&cmd, "EINVAL:Animation not supported"),
-            _ => self.kitty_fail(&cmd, "EINVAL:Unknown action"),
+            b'f' | b'a' | b'c' => self.kitty_fail(&cmd, "EINVAL:animation is not supported"),
+            _ => self.kitty_fail(&cmd, "EINVAL:unsupported action"),
         }
     }
     fn kitty_transmit(&mut self, cmd: Command, payload: &[u8]) {
         let checked =
-            cmd.check_transmit().and_then(|_| base64_decode(payload).ok_or("EINVAL:Invalid base64 data"));
+            cmd.check_transmit().and_then(|_| base64_decode(payload).ok_or("EINVAL:invalid base64 payload"));
         match checked {
             Err(e) => {
                 self.kitty_fail(&cmd, e);
@@ -230,7 +230,7 @@ impl Term {
             return self.kitty_reply(&cmd, cmd.id, None);
         }
         if !self.make_room(rgba.len()) {
-            return self.kitty_fail(&cmd, "ENOSPC:Image storage is full");
+            return self.kitty_fail(&cmd, "ENOSPC:image storage is full");
         }
         let id = if cmd.number != 0 { self.graphics.free_id() } else { cmd.id };
         let uid = self.graphics.add_image(id, cmd.number, w, h, rgba);
@@ -241,10 +241,10 @@ impl Term {
     }
     fn kitty_put(&mut self, cmd: &Command) {
         if cmd.invalid {
-            return self.kitty_fail(cmd, "EINVAL:Malformed control data");
+            return self.kitty_fail(cmd, "EINVAL:malformed control data");
         }
         if cmd.id != 0 && cmd.number != 0 {
-            return self.kitty_fail(cmd, "EINVAL:Must not specify both image id and image number");
+            return self.kitty_fail(cmd, "EINVAL:i and I cannot be used together");
         }
         if let Err(e) = cmd.check_place() {
             return self.kitty_fail(cmd, e);
@@ -252,7 +252,7 @@ impl Term {
         let img =
             if cmd.number != 0 { self.graphics.by_number(cmd.number) } else { self.graphics.by_id(cmd.id) };
         let Some(img) = img else {
-            return self.kitty_fail(cmd, "ENOENT:Image not found");
+            return self.kitty_fail(cmd, "ENOENT:no image with this id or number");
         };
         let (uid, id, w, h) = (img.uid, img.id, img.width, img.height);
         self.kitty_place(cmd, uid, id, w, h);
@@ -442,14 +442,20 @@ mod tests {
     #[test]
     fn put_unknown_image_is_enoent() {
         let mut t = term();
-        assert_eq!(feed(&mut t, b"\x1b_Ga=p,i=77\x1b\\"), "\x1b_Gi=77;ENOENT:Image not found\x1b\\");
+        assert_eq!(
+            feed(&mut t, b"\x1b_Ga=p,i=77\x1b\\"),
+            "\x1b_Gi=77;ENOENT:no image with this id or number\x1b\\"
+        );
     }
 
     #[test]
     fn quiet_levels() {
         let mut t = term();
         assert_eq!(feed(&mut t, &apc("a=t,f=24,s=1,v=1,i=1,q=1", &[0; 3])), "");
-        assert_eq!(feed(&mut t, b"\x1b_Ga=p,i=9,q=1\x1b\\"), "\x1b_Gi=9;ENOENT:Image not found\x1b\\");
+        assert_eq!(
+            feed(&mut t, b"\x1b_Ga=p,i=9,q=1\x1b\\"),
+            "\x1b_Gi=9;ENOENT:no image with this id or number\x1b\\"
+        );
         assert_eq!(feed(&mut t, b"\x1b_Ga=p,i=9,q=2\x1b\\"), "");
     }
 
@@ -470,7 +476,7 @@ mod tests {
         assert_eq!(r, format!("\x1b_Gi={id},I=13;OK\x1b\\"));
         assert_eq!(
             feed(&mut t, &apc("a=t,f=24,s=1,v=1,i=1,I=2", &[0; 3])),
-            "\x1b_Gi=1,I=2;EINVAL:Must not specify both image id and image number\x1b\\"
+            "\x1b_Gi=1,I=2;EINVAL:i and I cannot be used together\x1b\\"
         );
     }
 
@@ -515,15 +521,15 @@ mod tests {
         assert_eq!(&*t.graphics.by_id(1).unwrap().rgba, &[1, 2, 3, 255, 4, 5, 6, 255]);
         assert_eq!(
             feed(&mut t, &apc("a=t,f=24,s=2,v=1,o=z,i=2", b"garbage")),
-            "\x1b_Gi=2;EINVAL:Failed to decompress image data\x1b\\"
+            "\x1b_Gi=2;EINVAL:could not decompress the data\x1b\\"
         );
         assert_eq!(
             feed(&mut t, &apc("a=t,f=32,s=2,v=2,i=3", &[0; 4])),
-            "\x1b_Gi=3;ENODATA:Insufficient image data\x1b\\"
+            "\x1b_Gi=3;ENODATA:not enough pixel data for the given size\x1b\\"
         );
         assert_eq!(
             feed(&mut t, &apc("a=t,f=100,i=4", b"nope")),
-            "\x1b_Gi=4;EBADPNG:Failed to decode PNG\x1b\\"
+            "\x1b_Gi=4;EBADPNG:could not decode the PNG data\x1b\\"
         );
     }
 
@@ -538,14 +544,14 @@ mod tests {
     fn unsupported_features_are_rejected() {
         let mut t = term();
         for (ctrl, err) in [
-            ("a=t,t=f,i=1", "EINVAL:Unsupported transmission medium"),
-            ("a=t,t=s,i=1", "EINVAL:Unsupported transmission medium"),
-            ("a=t,f=8,i=1", "EINVAL:Unsupported format"),
-            ("a=T,U=1,f=24,s=1,v=1,i=1", "EINVAL:Unicode placeholders not supported"),
-            ("a=p,P=1,i=1", "EINVAL:Relative placements not supported"),
-            ("a=f,i=1", "EINVAL:Animation not supported"),
-            ("a=a,i=1", "EINVAL:Animation not supported"),
-            ("a=c,i=1", "EINVAL:Animation not supported"),
+            ("a=t,t=f,i=1", "EINVAL:unsupported transmission medium"),
+            ("a=t,t=s,i=1", "EINVAL:unsupported transmission medium"),
+            ("a=t,f=8,i=1", "EINVAL:unsupported format"),
+            ("a=T,U=1,f=24,s=1,v=1,i=1", "EINVAL:Unicode placeholders are not supported"),
+            ("a=p,P=1,i=1", "EINVAL:relative placements are not supported"),
+            ("a=f,i=1", "EINVAL:animation is not supported"),
+            ("a=a,i=1", "EINVAL:animation is not supported"),
+            ("a=c,i=1", "EINVAL:animation is not supported"),
         ] {
             let r = feed(&mut t, &apc(ctrl, &[0; 3]));
             assert_eq!(r, format!("\x1b_Gi=1;{err}\x1b\\"), "{ctrl}");
@@ -557,7 +563,7 @@ mod tests {
     fn failed_chunked_upload_swallows_remaining_chunks() {
         let mut t = term();
         let r = feed(&mut t, b"\x1b_Ga=T,t=f,i=5,m=1;AAAA\x1b\\\x1b_Gm=1;AAAA\x1b\\\x1b_Gm=0;AAAA\x1b\\");
-        assert_eq!(r, "\x1b_Gi=5;EINVAL:Unsupported transmission medium\x1b\\");
+        assert_eq!(r, "\x1b_Gi=5;EINVAL:unsupported transmission medium\x1b\\");
         assert!(t.graphics.is_empty());
         assert_eq!(feed(&mut t, &apc("a=t,f=24,s=1,v=1,i=6", &[0; 3])), "\x1b_Gi=6;OK\x1b\\");
     }
@@ -777,7 +783,7 @@ mod tests {
         assert_eq!(t.graphics.bytes(), t.image_quota);
         let big = apc("a=t,f=24,s=32,v=33,i=9", &[0; 32 * 33 * 3]);
         assert!(t.graphics.by_id(9).is_none());
-        assert_eq!(feed(&mut t, &big), "\x1b_Gi=9;ENOSPC:Image storage is full\x1b\\");
+        assert_eq!(feed(&mut t, &big), "\x1b_Gi=9;ENOSPC:image storage is full\x1b\\");
     }
 
     #[test]
@@ -800,7 +806,7 @@ mod tests {
         let mut t = term();
         t.image_quota = 16;
         let r = feed(&mut t, b"\x1b_Ga=t,f=32,s=4,v=4,i=1,m=1;AAAAAAAAAAAAAAAA\x1b\\\x1b_Gm=1;AAAAAAAA\x1b\\\x1b_Gm=0;AAAA\x1b\\");
-        assert_eq!(r, "\x1b_Gi=1;EFBIG:Image too large\x1b\\");
+        assert_eq!(r, "\x1b_Gi=1;EFBIG:image exceeds the size limit\x1b\\");
         assert!(t.graphics.is_empty());
     }
 }
