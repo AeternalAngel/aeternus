@@ -13,6 +13,10 @@ All notable changes to this project are documented here. The format is based on
 - The new `terminal.images` option (on by default) turns off both image protocols. When off, the terminal does not answer kitty graphics queries and does not report sixel support.
 - Images use at most 256 MB of decoded pixels per tab; the oldest images are dropped when the limit is reached, and images larger than 10000×10000 pixels are refused. Selection, search matches and the cursor stay visible over images, and images keep their own transparency with `window.opacity`.
 
+### Removed
+
+- The Portuguese translations of the README and the changelog. The project documentation is now only in English.
+
 ### Fixed
 
 - Programs were not told about a new cell size in pixels when the scale factor or the zoom changed without changing the number of rows and columns, so tools that size images from the terminal's pixel size used the old one.
@@ -122,7 +126,7 @@ All notable changes to this project are documented here. The format is based on
 ### Removed
 
 - Windows support: platform code (ConPTY-side `cmd.exe` fallback, `%APPDATA%` config path, `aeternus.log`, DWM/dark-mode helpers, `windows_subsystem`), the `cfg(windows)` dependency, CI job and release packaging are gone. Aeternus is Linux-only (Wayland/X11).
-- The Portuguese part of this file moved to [CHANGELOG.pt-BR.md](CHANGELOG.pt-BR.md).
+- The Portuguese part of this file moved to `CHANGELOG.pt-BR.md`.
 
 ## [1.3] - 2026-11-12
 
