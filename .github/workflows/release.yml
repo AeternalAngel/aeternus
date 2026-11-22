@@ -97,8 +97,52 @@ jobs:
           name: linux-${{ matrix.arch }}
           path: dist/*
 
-  publish:
+  arch:
     needs: [linux]
+    if: ${{ !contains(github.ref_name, '-') && !contains(github.ref_name, 'w') }}
+    runs-on: ubuntu-latest
+    container: archlinux:latest
+    steps:
+      - name: Dependencies
+        run: pacman -Syu --noconfirm --needed base-devel git namcap
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: linux-x86_64
+          path: linux-dist
+      - name: Check tag against PKGBUILD
+        working-directory: packaging/aur/aeternus-bin
+        run: |
+          V=${GITHUB_REF_NAME#v}
+          P=$(sed -n 's/^pkgver=//p' PKGBUILD)
+          [ "$V" = "$P" ] || { echo "Tag $V != PKGBUILD pkgver $P"; exit 1; }
+      - name: Build package
+        shell: bash
+        run: |
+          D=packaging/aur/aeternus-bin
+          mapfile -t DEPS < <(source "$D/PKGBUILD" && printf '%s\n' "${depends[@]}")
+          pacman -S --noconfirm --needed "${DEPS[@]}"
+          useradd -m builder
+          SRC=$(source "$D/PKGBUILD" && basename "${source_x86_64[0]}")
+          test -f "linux-dist/$SRC"
+          cp "linux-dist/$SRC" "$D/"
+          chown -R builder "$D"
+          su builder -c "cd '$PWD/$D' && makepkg --noconfirm"
+          mkdir -p dist
+          mv "$D"/*.pkg.tar.zst dist/
+          ls -l dist
+      - name: namcap
+        run: |
+          namcap packaging/aur/aeternus-bin/PKGBUILD
+          namcap dist/*.pkg.tar.zst
+      - uses: actions/upload-artifact@v4
+        with:
+          name: arch-x86_64
+          path: dist/*.pkg.tar.zst
+
+  publish:
+    needs: [linux, arch]
+    if: ${{ !cancelled() && needs.linux.result == 'success' && (needs.arch.result == 'success' || needs.arch.result == 'skipped') }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
