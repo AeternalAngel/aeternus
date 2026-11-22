@@ -204,7 +204,7 @@ pub fn fit_rect(
     let (cw, ch) = (cell.0.max(1) as f32, cell.1.max(1) as f32);
     let (ox, oy) = (off.0 as f32 / cw, off.1 as f32 / ch);
     let (sw, sh) = (src_w.max(1) as f32, src_h.max(1) as f32);
-    let (mut x, mut y) = (ox, oy);
+    let (x, y) = (ox, oy);
     let (w, h, cols, rows) = match cells {
         (0, 0) => {
             let (w, h) = (sw / cw, sh / ch);
@@ -220,13 +220,7 @@ pub fn fit_rect(
             let w = h * ch * sw / sh / cw;
             (w, h, (ox + w).ceil(), r as f32)
         }
-        (c, r) => {
-            let scale = (c as f32 * cw / sw).min(r as f32 * ch / sh);
-            let (w, h) = (sw * scale / cw, sh * scale / ch);
-            x += (c as f32 - w) / 2.0;
-            y += (r as f32 - h) / 2.0;
-            (w, h, c as f32, r as f32)
-        }
+        (c, r) => ((c as f32 - ox).max(0.0), (r as f32 - oy).max(0.0), c as f32, r as f32),
     };
     (cols.max(1.0) as usize, rows.max(1.0) as usize, [x, y, w, h])
 }
@@ -383,9 +377,8 @@ mod tests {
         assert_eq!(fit_rect(20, 20, (5, 0), (0, 0), (10, 20)), (3, 1, [0.5, 0.0, 2.0, 1.0]));
         assert_eq!(fit_rect(100, 50, (0, 0), (4, 0), (10, 20)), (4, 1, [0.0, 0.0, 4.0, 1.0]));
         assert_eq!(fit_rect(100, 100, (0, 0), (0, 2), (10, 20)), (4, 2, [0.0, 0.0, 4.0, 2.0]));
-        let (c, r, rect) = fit_rect(100, 100, (0, 0), (10, 2), (10, 20));
-        assert_eq!((c, r), (10, 2));
-        assert_eq!(rect, [3.0, 0.0, 4.0, 2.0]);
+        assert_eq!(fit_rect(9, 18, (0, 0), (1, 1), (9, 19)), (1, 1, [0.0, 0.0, 1.0, 1.0]));
+        assert_eq!(fit_rect(100, 100, (5, 0), (10, 2), (10, 20)), (10, 2, [0.5, 0.0, 9.5, 2.0]));
     }
 
     #[test]
