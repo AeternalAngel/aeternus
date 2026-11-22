@@ -60,9 +60,7 @@ struct Tab {
 impl Tab {
     fn write(&self, bytes: &[u8]) {
         if let Some(p) = &self.pty {
-            if let Ok(mut w) = p.writer.lock() {
-                let _ = w.write_all(bytes);
-            }
+            let _ = p.writer.send(bytes.to_vec());
         }
     }
     fn reap(&mut self) -> Option<thread::JoinHandle<()>> {
@@ -107,9 +105,7 @@ fn reader_loop(
                     std::mem::take(&mut term.replies)
                 };
                 if !replies.is_empty() {
-                    if let Ok(mut w) = writer.lock() {
-                        let _ = w.write_all(&replies);
-                    }
+                    let _ = writer.send(replies);
                 }
                 if !dirty.swap(true, Ordering::AcqRel) {
                     let _ = proxy.send_event(UserEvent::Wakeup(id));

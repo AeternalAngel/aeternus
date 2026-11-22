@@ -1,12 +1,13 @@
 use std::io;
 use std::path::Path;
-use std::sync::{Arc, Mutex};
+use std::sync::mpsc::{self, Sender};
+use std::thread;
 
 use portable_pty::{native_pty_system, Child, CommandBuilder, MasterPty, PtySize};
 
 use crate::terminfo::TermEnv;
 
-pub type Writer = Arc<Mutex<Box<dyn io::Write + Send>>>;
+pub type Writer = Sender<Vec<u8>>;
 
 pub struct Pty {
     pub writer: Writer,
@@ -64,9 +65,17 @@ impl Pty {
         cmd.env("TERM_PROGRAM_VERSION", env!("CARGO_PKG_VERSION"));
         let child = pty.slave.spawn_command(cmd).map_err(io::Error::other)?;
         let reader = pty.master.try_clone_reader().map_err(io::Error::other)?;
-        let writer = pty.master.take_writer().map_err(io::Error::other)?;
+        let mut sink = pty.master.take_writer().map_err(io::Error::other)?;
         drop(pty.slave);
-        Ok((Self { writer: Arc::new(Mutex::new(writer)), child, master: pty.master }, reader))
+        let (writer, queue) = mpsc::channel::<Vec<u8>>();
+        thread::Builder::new().name("pty-writer".into()).spawn(move || {
+            for bytes in queue {
+                if sink.write_all(&bytes).and_then(|()| sink.flush()).is_err() {
+                    break;
+                }
+            }
+        })?;
+        Ok((Self { writer, child, master: pty.master }, reader))
     }
     pub fn resize(&self, size: Size) {
         let _ = self.master.resize(size.pty());
