@@ -92,7 +92,7 @@ jobs:
           chmod +x appimagetool
           ARCH=$A ./appimagetool --appimage-extract-and-run --no-appstream $APPDIR \
             "dist/aeternus-${{ steps.ver.outputs.short }}-$A.AppImage"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: linux-${{ matrix.arch }}
           path: dist/*
@@ -135,7 +135,7 @@ jobs:
         run: |
           namcap packaging/aur/aeternus-bin/PKGBUILD
           namcap dist/*.pkg.tar.zst
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: arch-x86_64
           path: dist/*.pkg.tar.zst
