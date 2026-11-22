@@ -22,6 +22,7 @@
 - **Text:** truecolor, 256 colors, bold/italic/strikethrough/blink, underline styles (double, curly, dotted, dashed) and colors, wide (CJK) characters, color emoji, combining accents, skin-tone modifiers and ZWJ emoji sequences, DEC line drawing.
 - **Links:** `Ctrl+click` opens URLs and OSC 8 hyperlinks.
 - **Compatibility:** alternate screen, bracketed paste, mouse reporting (1000/1002/1003/SGR), focus events, synchronized output (2026), XTGETTCAP, DECRQSS, kitty keyboard protocol (disambiguate level), cursor shapes, mouse pointer shapes (OSC 22), OSC 4/7/8/10/11/12/52, tab stops, insert/origin modes and more.
+- **Terminfo:** ships an `xterm-aeternus` entry that declares styled and colored underlines, synchronized output and truecolor, with a fallback to `xterm-256color` when it isn't installed.
 - **Shell integration:** prompt marks (OSC 133) to jump between prompts and select a command's output.
 - **Desktop notifications** from programs (OSC 9, 99 and 777).
 - **Daily use:** 10k-line scrollback with reflow on resize and search, word/line selection, clipboard and primary selection, zoom, fullscreen, visual bell.
@@ -42,6 +43,7 @@ Every [release](https://github.com/AeternalAngel/aeternus/releases) ships prebui
 | `.rpm` (Fedora, openSUSE) | `x86_64` | `aarch64` |
 | AppImage | `x86_64` | `aarch64` |
 | Tarball (any distribution) | `x86_64` | `aarch64` |
+| `.pkg.tar.zst` (Arch Linux) | `x86_64` | (build it with `makepkg`) |
 
 Pick the file that matches your architecture (`uname -m` tells you).
 
@@ -90,7 +92,21 @@ sudo ./install.sh --prefix /usr/local   # system-wide
 
 ### Arch Linux
 
-An AUR package is planned. Until then, use the tarball above or build from source.
+AUR registration is closed for now, so there is no AUR package yet; one is planned. Until then, pick one of these:
+
+- Install the package attached to the release (x86_64):
+
+  ```bash
+  sudo pacman -U ./aeternus-bin-*-x86_64.pkg.tar.zst
+  ```
+
+- Build a package with `makepkg` from the PKGBUILDs in this repository, either `aeternus-bin` (downloads the prebuilt binary from the release, x86_64 or aarch64) or `aeternus` (compiles from source):
+
+  ```bash
+  git clone https://github.com/AeternalAngel/aeternus.git
+  cd aeternus/packaging/aur/aeternus-bin   # or packaging/aur/aeternus
+  makepkg -si
+  ```
 
 ### From source
 
