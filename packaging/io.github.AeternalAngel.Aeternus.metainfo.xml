@@ -60,6 +60,16 @@
         <p>Scrollback search, underline styles and colors, blinking text, an xterm-aeternus terminfo entry, shell integration, desktop notifications, mouse pointer shapes and XTGETTCAP/DECRQSS replies.</p>
       </description>
     </release>
+    <release version="1.4.2" date="2026-11-20">
+      <description>
+        <p>Powerline separators drawn to fill the cell exactly, and dead keys followed by space insert the accent.</p>
+      </description>
+    </release>
+    <release version="1.4.1" date="2026-11-17">
+      <description>
+        <p>Kitty's default ANSI palette, text gamma matching kitty, and text in the tab strip, menus and Preferences aligned to whole pixels.</p>
+      </description>
+    </release>
     <release version="1.4.0" date="2026-11-15">
       <description>
         <p>Tabs, menu bar, preferences panel, cursor trail, hyperlinks and many compatibility fixes.</p>

@@ -48,6 +48,9 @@ jobs:
         run: |
           CARGO=$(grep -m1 '^version' Cargo.toml | cut -d'"' -f2)
           [ "${{ steps.ver.outputs.v }}" = "$CARGO" ] || { echo "Tag ${{ steps.ver.outputs.v }} != Cargo.toml $CARGO"; exit 1; }
+      - name: Check AUR and AppStream versions
+        if: steps.ver.outputs.snapshot == '0'
+        run: sh packaging/sync-version.sh --check
       - name: Test
         run: cargo test --locked --lib
       - name: Build

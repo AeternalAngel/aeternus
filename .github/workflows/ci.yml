@@ -62,7 +62,8 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y desktop-file-utils appstream shellcheck groff-base
       - run: desktop-file-validate packaging/io.github.AeternalAngel.Aeternus.desktop
       - run: appstreamcli validate --no-net packaging/io.github.AeternalAngel.Aeternus.metainfo.xml
-      - run: shellcheck install.sh
+      - run: shellcheck install.sh packaging/sync-version.sh packaging/aur/update.sh
+      - run: sh packaging/sync-version.sh --check
       - name: Terminfo
         run: |
           tic -x -o "$RUNNER_TEMP/terminfo" packaging/terminfo/xterm-aeternus.terminfo
