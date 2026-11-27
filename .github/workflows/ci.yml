@@ -54,6 +54,22 @@ jobs:
       - uses: actions/checkout@v4
       - uses: EmbarkStudios/cargo-deny-action@v2
 
+  compat:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install programs
+        run: sudo apt-get update && sudo apt-get install -y vttest tmux vim zsh fish dash less htop ncurses-bin
+      - uses: rhysd/action-setup-vim@v1
+        with:
+          neovim: true
+          version: stable
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo test --locked --test compat
+        env:
+          AETERNUS_COMPAT_REQUIRE: "1"
+
   packaging:
     runs-on: ubuntu-latest
     steps:

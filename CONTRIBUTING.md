@@ -32,6 +32,18 @@ cargo test
 CI runs the same commands, plus a build with the minimum supported Rust version, `cargo deny`
 and validation of the desktop entry, the AppStream metadata and `install.sh`.
 
+### Compatibility tests
+
+`tests/compat` runs real programs (bash, zsh, fish, dash, tmux, Neovim, Vim, less, htop and
+vttest) in a pseudo-terminal connected to Aeternus's parser and screen, with no window, and checks
+what they draw and how they react to keys, mouse clicks, pastes and resizes. Each program runs
+without its configuration files and with a temporary `HOME`. Tests for programs that are not
+installed are skipped; set `AETERNUS_COMPAT_REQUIRE=1` to make them fail instead, as CI does.
+
+```bash
+cargo test --test compat
+```
+
 Please also:
 
 - keep pull requests focused on one change;
