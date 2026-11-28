@@ -83,6 +83,19 @@ pub fn combo_matches(combo: &KeyCombo, key: &KeyInput, mods: ModifiersState) -> 
     }
 }
 
+pub fn paste_bytes(text: &str, bracketed: bool) -> Vec<u8> {
+    let clean: String = text.chars().filter(|&c| c != '\x1b' && c != '\u{9b}').collect();
+    let mut data = Vec::with_capacity(clean.len() + 16);
+    if bracketed {
+        data.extend_from_slice(b"\x1b[200~");
+        data.extend_from_slice(clean.as_bytes());
+        data.extend_from_slice(b"\x1b[201~");
+    } else {
+        data.extend_from_slice(clean.replace("\r\n", "\r").replace('\n', "\r").as_bytes());
+    }
+    data
+}
+
 pub fn mouse_report(
     sgr: bool,
     button: u8,

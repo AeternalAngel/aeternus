@@ -583,15 +583,7 @@ impl State {
             t.selection_clear();
             t.bracketed_paste
         });
-        let clean: String = text.chars().filter(|&c| c != '\x1b' && c != '\u{9b}').collect();
-        let mut data = Vec::with_capacity(clean.len() + 16);
-        if bracketed {
-            data.extend_from_slice(b"\x1b[200~");
-            data.extend_from_slice(clean.as_bytes());
-            data.extend_from_slice(b"\x1b[201~");
-        } else {
-            data.extend_from_slice(clean.replace("\r\n", "\r").replace('\n', "\r").as_bytes());
-        }
+        let data = input::paste_bytes(&text, bracketed);
         self.write(&data);
         self.window.request_redraw();
     }
