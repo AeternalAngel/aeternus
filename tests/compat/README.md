@@ -44,3 +44,22 @@ with its default `grapheme-width-method=wcswidth` follows glibc instead. VS16 is
 kitty widens `❤️` to two columns, but Aeternus keeps glibc's width so readline and `ls` stay
 aligned. Aeternus does not implement mode 2027 (grapheme cluster mode), so programs cannot ask for
 the other behaviour.
+
+## What these tests do not cover
+
+A green run means the parser and the screen model behave as these programs expect. It does not
+mean the terminal works end to end. Not covered:
+
+- **Rendering.** Nothing is drawn: the wgpu renderer, glyph atlas, colors on screen, cursor
+  drawing, damage tracking and images (sixel and kitty graphics are only parsed, not shown).
+- **Window input.** Tests start from `KeyInput` and cell coordinates, so the translation of winit
+  events is skipped: keyboard layouts, dead keys, compose, IME, modifier tracking, pixel-to-cell
+  mouse mapping, scroll wheel and touchpad.
+- **Fonts.** Font lookup and fallback, ligatures, emoji fonts and how wide clusters and flags
+  actually look.
+- **The rest of the app.** Preferences, configuration reloading, the system clipboard (OSC 52 is
+  checked only up to the request reaching the terminal), selection, scrollback UI, search,
+  notifications and window management.
+- **Real user setups.** Programs run without configuration files, with `C.UTF-8` and at fixed
+  sizes; prompt frameworks, plugins and other locales are not exercised. Results also depend on
+  the installed program versions.
