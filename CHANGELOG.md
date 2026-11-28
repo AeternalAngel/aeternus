@@ -6,6 +6,10 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+### Fixed
+
+- Leaving the alternate screen could put the cursor in the wrong place when the program that used it had saved the cursor itself (`ESC 7`, `tput sc`): both screens shared one saved cursor. Like xterm, the main and the alternate screen now each keep their own.
+
 ## [1.6-pre2] - 2026-11-22
 
 ### Fixed

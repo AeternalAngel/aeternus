@@ -194,6 +194,7 @@ pub struct Term {
     scroll_bottom: usize,
     wrap_pending: bool,
     saved: Option<SavedCursor>,
+    other_saved: Option<SavedCursor>,
     main_grid: Option<Grid>,
     scrollback: VecDeque<Vec<Cell>>,
     max_scrollback: usize,
@@ -269,6 +270,7 @@ impl Term {
             scroll_bottom: rows - 1,
             wrap_pending: false,
             saved: None,
+            other_saved: None,
             main_grid: None,
             scrollback: VecDeque::new(),
             max_scrollback: SCROLLBACK_LINES,
@@ -1187,6 +1189,7 @@ impl Term {
             if save {
                 self.save_cursor();
             }
+            std::mem::swap(&mut self.saved, &mut self.other_saved);
             let blank = Grid::new(self.cols(), self.rows());
             self.main_grid = Some(std::mem::replace(&mut self.grid, blank));
             self.saved_graphics = Some(std::mem::take(&mut self.graphics));
@@ -1195,6 +1198,7 @@ impl Term {
                 self.grid = g;
             }
             self.graphics = self.saved_graphics.take().unwrap_or_default();
+            std::mem::swap(&mut self.saved, &mut self.other_saved);
             if save {
                 self.restore_cursor();
             }
@@ -3357,6 +3361,19 @@ mod tests {
         feed(&mut t, "http://abcdefghijklmn");
         assert_eq!(t.url_at(1, 3).as_deref(), Some("http://abcdefghijklmn"));
     }
+    #[test]
+    fn each_screen_keeps_its_own_saved_cursor() {
+        let mut t = Term::new(80, 24);
+        feed(&mut t, "\x1b[3;2Hshell\x1b[?1049h\x1b[7;6H\x1b7\x1b[1;1Hx\x1b[?1049l");
+        assert_eq!((t.cursor.row, t.cursor.col), (2, 6));
+        feed(&mut t, "\x1b[1;1H\x1b8");
+        assert_eq!((t.cursor.row, t.cursor.col), (2, 6));
+        feed(&mut t, "\x1b[?1049h\x1b8");
+        assert_eq!((t.cursor.row, t.cursor.col), (6, 5));
+        feed(&mut t, "\x1b[?1049l\x1b[?47h\x1b[2;2H\x1b7\x1b[?47l\x1b8");
+        assert_eq!((t.cursor.row, t.cursor.col), (2, 6));
+    }
+
     #[test]
     fn kitty_keyboard_protocol() {
         let mut t = Term::new(10, 1);
