@@ -27,7 +27,7 @@ jobs:
           apt-get update
           apt-get install -y curl ca-certificates git build-essential pkg-config file \
             libxkbcommon-dev libwayland-dev libx11-dev desktop-file-utils
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Install Rust
         run: |
           curl -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal
@@ -109,7 +109,7 @@ jobs:
     steps:
       - name: Dependencies
         run: pacman -Syu --noconfirm --needed base-devel git namcap
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions/download-artifact@v4
         with:
           name: linux-x86_64
@@ -149,7 +149,7 @@ jobs:
     if: ${{ !cancelled() && needs.linux.result == 'success' && (needs.arch.result == 'success' || needs.arch.result == 'skipped') }}
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions/download-artifact@v4
         with:
           path: dist
