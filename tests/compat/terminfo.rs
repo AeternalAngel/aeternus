@@ -102,7 +102,8 @@ fn capabilities_render_as_declared() {
     require!("sh", "tput");
     let s = Session::spawn(&["sh"], 80, 24);
     s.type_str("clear; tput bold; printf B; tput sgr0; tput smul; printf U; tput sgr0; tput rev; printf R; tput sgr0; tput setaf 1; printf F; tput setab 4; printf G; tput sgr0; tput smacs; printf qx; tput rmacs; tput cup 5 10; printf here; echo\n");
-    s.wait_text("here");
+    s.wait_row(5, "          here");
+    s.settle();
     let (r, c) = s.find("BURFG").expect("styled text");
     use aeternus::cell::{flags, Color};
     assert_ne!(s.cell(r, c).flags & flags::BOLD, 0);
@@ -122,4 +123,19 @@ fn capabilities_render_as_declared() {
         assert_eq!(s.cell(r, c).flags & flags::UNDERLINE_STYLE, flags::UNDERLINE_CURLY);
         assert_eq!(s.with(|t| t.underline_color(&t.grid.row(r)[c + 1])), Some(Color::Rgb(0x10, 0x20, 0x30)));
     }
+}
+
+#[test]
+fn saves_restores_and_wraps_as_declared() {
+    require!("sh", "tput");
+    let s = Session::spawn(&["sh"], 80, 24);
+    s.type_str("clear; tput cup 3 7; tput sc; tput cup 10 0; printf moved; tput rc; printf back; tput cup 12 0; printf '%085d' 0; tput cup 20 0; echo done\n");
+    s.wait_row(20, "done");
+    s.settle();
+    assert_eq!(s.find("back"), Some((3, 7)), "{}", s.dump());
+    assert!(s.with(|t| t.grid.row(12).iter().all(|c| c.ch == '0')), "{}", s.dump());
+    assert_eq!(s.row(13), "00000", "{}", s.dump());
+    s.type_str("tput am && echo has-am; tput sc | od -An -c | tr -d ' '\n");
+    s.wait_line("has-am");
+    s.wait_line("0337");
 }

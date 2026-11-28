@@ -54,7 +54,7 @@ fn pastes_without_autoindent(cmd: &str) {
     s.wait("bracketed paste to be enabled", |t| t.bracketed_paste);
     ex(&s, "set autoindent");
     s.type_str("i");
-    s.send("\x1b[200~fn main() {\n    body();\n}\x1b[201~");
+    s.paste("fn main() {\n    body();\n}");
     s.key(NamedKey::Escape);
     s.wait_row(2, "}");
     assert_eq!(s.row(0), "fn main() {");
@@ -128,7 +128,7 @@ fn nvim_enables_mouse_and_the_kitty_keyboard_protocol() {
     s.type_str("ione\ntwo\nthree");
     s.key(NamedKey::Escape);
     s.wait_row(2, "three");
-    s.send("\x1b[<0;3;1M\x1b[<0;3;1m");
+    s.click(0, 2);
     s.type_str("x");
     s.wait("the click to move the cursor onto the last letter", |t| {
         crate::harness::row_text(t.grid.row(0)) == "on"

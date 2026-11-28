@@ -83,7 +83,7 @@ fn splits_panes_and_follows_mouse_clicks() {
     });
     t.tmux(&["set", "-g", "mouse", "on"]);
     t.wait("tmux to enable mouse reporting", |term| term.mouse_mode != MouseMode::Off && term.mouse_sgr);
-    t.send("\x1b[<0;5;3M\x1b[<0;5;3m");
+    t.click(2, 4);
     t.wait("the click to select the top pane", |_| t.tmux(&["display", "-p", "#{pane_index}"]) == "0");
     t.run("echo top-pane");
     t.wait_line("top-pane");

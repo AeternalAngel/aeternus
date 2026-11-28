@@ -12,9 +12,8 @@ fn choose(s: &Session, n: &str) {
 }
 
 fn next(s: &Session, marker: &str) {
-    s.send("\r");
+    s.send_and_settle("\r");
     s.wait_text(marker);
-    s.settle();
 }
 
 fn check_border_and_frame(s: &Session) {
@@ -67,15 +66,14 @@ fn check_autowrap(s: &Session) {
 fn cursor_movements() {
     require!("vttest");
     let s = start();
-    choose(&s, "1");
+    s.send_and_settle("1\r");
     s.wait_text("The screen should be cleared");
-    s.settle();
     check_border_and_frame(&s);
     next(&s, "The screen should be cleared");
     check_border_and_frame(&s);
-    next(&s, "Test of autowrap");
+    next(&s, "Push <RETURN>");
     check_autowrap(&s);
-    next(&s, "Test of autowrap");
+    next(&s, "Push <RETURN>");
     check_autowrap(&s);
     next(&s, "Below should be four identical lines");
     let same = s.screen().iter().filter(|l| *l == "A B C D E F G H I").count();
@@ -110,7 +108,10 @@ fn terminal_reports() {
     choose(&s, "4");
     s.wait_text("Report is");
     s.settle();
-    assert!(!s.screen().join("\n").contains("Unknown response"), "{}", s.dump());
+    let report = s.screen().join("\n");
+    assert!(!report.contains("Unknown response"), "{}", s.dump());
+    assert!(report.contains("VT200 family"), "{}", s.dump());
+    assert!(report.contains("22 = color"), "{}", s.dump());
     next(&s, "Terminal Reports/Responses");
     choose(&s, "0");
     s.wait_text("Enter choice number");

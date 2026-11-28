@@ -7,7 +7,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use aeternus::cell::Cell;
-use aeternus::input::{key_bytes, KeyInput, KeyModes};
+use aeternus::input::{key_bytes, mouse_report, paste_bytes, KeyInput, KeyModes};
 use aeternus::parser::Parser;
 use aeternus::pty::{Pty, Size};
 use aeternus::term::{Term, WIDE_SPACER};
@@ -75,6 +75,7 @@ pub struct Session {
     pty: Pty,
     shared: Arc<Mutex<Shared>>,
     eof: Arc<AtomicBool>,
+    read: Arc<AtomicUsize>,
     pub home: PathBuf,
 }
 
@@ -129,7 +130,8 @@ impl Session {
         term.cell_px = (8, 16);
         let shared = Arc::new(Mutex::new(Shared { term, parser: Parser::new() }));
         let eof = Arc::new(AtomicBool::new(false));
-        let (s2, e2, writer) = (shared.clone(), eof.clone(), pty.writer.clone());
+        let read = Arc::new(AtomicUsize::new(0));
+        let (s2, e2, r2, writer) = (shared.clone(), eof.clone(), read.clone(), pty.writer.clone());
         thread::spawn(move || {
             let mut buf = [0u8; 65536];
             loop {
@@ -142,12 +144,13 @@ impl Session {
                         if !term.replies.is_empty() {
                             let _ = writer.send(std::mem::take(&mut term.replies));
                         }
+                        r2.fetch_add(n, Ordering::SeqCst);
                     }
                 }
             }
             e2.store(true, Ordering::SeqCst);
         });
-        Self { pty, shared, eof, home }
+        Self { pty, shared, eof, read, home }
     }
 
     pub fn with<R>(&self, f: impl FnOnce(&Term) -> R) -> R {
@@ -156,6 +159,19 @@ impl Session {
 
     pub fn send(&self, bytes: impl AsRef<[u8]>) {
         let _ = self.pty.writer.send(bytes.as_ref().to_vec());
+    }
+
+    pub fn send_and_settle(&self, bytes: impl AsRef<[u8]>) {
+        let before = self.read.load(Ordering::SeqCst);
+        self.send(bytes);
+        let deadline = Instant::now() + TIMEOUT;
+        while self.read.load(Ordering::SeqCst) == before {
+            if Instant::now() > deadline {
+                panic!("timed out waiting for output\n{}", self.dump());
+            }
+            thread::sleep(Duration::from_millis(10));
+        }
+        self.settle();
     }
 
     pub fn type_str(&self, s: &str) {
@@ -179,6 +195,20 @@ impl Session {
             KeyInput { key: Key::Named(key), base: None, text: None, location: KeyLocation::Standard };
         let bytes = key_bytes(&input, mods, modes).expect("key has an encoding");
         self.send(bytes);
+    }
+
+    pub fn paste(&self, text: &str) {
+        let bracketed = self.with(|t| t.bracketed_paste);
+        self.send(paste_bytes(text, bracketed));
+    }
+
+    pub fn click(&self, row: usize, col: usize) {
+        let sgr = self.with(|t| t.mouse_sgr);
+        for release in [false, true] {
+            let bytes = mouse_report(sgr, 0, row, col, release, false, ModifiersState::empty())
+                .expect("position has an encoding");
+            self.send(bytes);
+        }
     }
 
     pub fn ctrl(&self, c: char) {
