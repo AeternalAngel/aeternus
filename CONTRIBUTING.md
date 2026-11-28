@@ -39,6 +39,8 @@ vttest) in a pseudo-terminal connected to Aeternus's parser and screen, with no 
 what they draw and how they react to keys, mouse clicks, pastes and resizes. Each program runs
 without its configuration files and with a temporary `HOME`. Tests for programs that are not
 installed are skipped; set `AETERNUS_COMPAT_REQUIRE=1` to make them fail instead, as CI does.
+[tests/compat/README.md](tests/compat/README.md) lists what each module covers and the character
+widths Aeternus uses.
 
 ```bash
 cargo test --test compat

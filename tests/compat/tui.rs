@@ -35,7 +35,7 @@ fn htop_draws_and_quits_with_f10() {
     require!("htop");
     let s = Session::spawn(&["htop"], 100, 30);
     s.wait_text("Tasks:");
-    s.wait("the function key bar", |t| crate::harness::row_text(t.grid.row(29)).contains("F10Quit"));
+    s.wait("the function key bar", |t| crate::harness::row_text(t, 29).contains("F10Quit"));
     s.key(NamedKey::F10);
     s.wait_exit();
 }

@@ -4,4 +4,5 @@ mod shells;
 mod terminfo;
 mod tmux;
 mod tui;
+mod unicode;
 mod vttest;

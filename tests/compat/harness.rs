@@ -229,7 +229,7 @@ impl Session {
     }
 
     pub fn row(&self, r: usize) -> String {
-        self.with(|t| row_text(t.grid.row(r)))
+        self.with(|t| row_text(t, r))
     }
 
     pub fn dump(&self) -> String {
@@ -254,9 +254,7 @@ impl Session {
     }
 
     pub fn wait_row(&self, r: usize, text: &str) {
-        self.wait(&format!("{text:?} on row {r}"), |t| {
-            r < t.rows() && row_text(t.grid.row(r)).contains(text)
-        });
+        self.wait(&format!("{text:?} on row {r}"), |t| r < t.rows() && row_text(t, r).contains(text));
     }
 
     pub fn wait_line(&self, line: &str) {
@@ -322,11 +320,21 @@ impl Drop for Session {
     }
 }
 
-pub fn row_text(cells: &[Cell]) -> String {
-    let s: String = cells.iter().filter(|c| c.flags & WIDE_SPACER == 0).map(|c| c.ch).collect();
+pub fn row_text(t: &Term, r: usize) -> String {
+    let mut s = String::new();
+    for c in t.grid.row(r).iter().filter(|c| c.flags & WIDE_SPACER == 0) {
+        s.push(c.ch);
+        if let Some(cl) = t.cluster(c) {
+            s.push_str(cl);
+        }
+    }
     s.trim_end().to_string()
 }
 
+pub fn is_wide(c: char) -> bool {
+    unicode_width::UnicodeWidthChar::width(c) == Some(2)
+}
+
 pub fn screen_of(t: &Term) -> Vec<String> {
-    (0..t.rows()).map(|r| row_text(t.grid.row(r))).collect()
+    (0..t.rows()).map(|r| row_text(t, r)).collect()
 }

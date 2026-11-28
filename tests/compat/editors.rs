@@ -130,9 +130,7 @@ fn nvim_enables_mouse_and_the_kitty_keyboard_protocol() {
     s.wait_row(2, "three");
     s.click(0, 2);
     s.type_str("x");
-    s.wait("the click to move the cursor onto the last letter", |t| {
-        crate::harness::row_text(t.grid.row(0)) == "on"
-    });
+    s.wait("the click to move the cursor onto the last letter", |t| crate::harness::row_text(t, 0) == "on");
     ex(&s, "q!");
     s.wait_text("after-editor");
     assert_eq!(s.with(|t| t.kb_flags), 0);
