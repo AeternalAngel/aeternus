@@ -20,8 +20,8 @@ pkgbase = aeternus-bin
 	conflicts = aeternus
 	options = !debug
 	source_x86_64 = https://github.com/AeternalAngel/aeternus/releases/download/v1.6.0/aeternus-1.6-linux-x86_64.tar.gz
-	sha256sums_x86_64 = SKIP
+	sha256sums_x86_64 = 12d0c43d8338754545989377b7d65c264aff26ecac8122f4ca1678d03749acbd
 	source_aarch64 = https://github.com/AeternalAngel/aeternus/releases/download/v1.6.0/aeternus-1.6-linux-aarch64.tar.gz
-	sha256sums_aarch64 = SKIP
+	sha256sums_aarch64 = 7a3877716fd3c980fcba59755b5ccbd8d4014d8f18ffcdf5d1b14012a6ba1a84
 
 pkgname = aeternus-bin

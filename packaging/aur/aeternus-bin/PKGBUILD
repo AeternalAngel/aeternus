@@ -20,8 +20,8 @@ options=('!debug')
 _short=${pkgver%.0}
 source_x86_64=("$url/releases/download/v$pkgver/aeternus-$_short-linux-x86_64.tar.gz")
 source_aarch64=("$url/releases/download/v$pkgver/aeternus-$_short-linux-aarch64.tar.gz")
-sha256sums_x86_64=('SKIP')
-sha256sums_aarch64=('SKIP')
+sha256sums_x86_64=('12d0c43d8338754545989377b7d65c264aff26ecac8122f4ca1678d03749acbd')
+sha256sums_aarch64=('7a3877716fd3c980fcba59755b5ccbd8d4014d8f18ffcdf5d1b14012a6ba1a84')
 
 package() {
   cd "aeternus-$_short-linux-$CARCH"

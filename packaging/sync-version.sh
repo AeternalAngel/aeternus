@@ -31,7 +31,7 @@ if [ "$CHECK" = 1 ]; then
         S=$(sed -n "s/^${TAB}pkgver = //p" "$D/.SRCINFO")
         [ "$P" = "$V" ] || { echo "$pkg/PKGBUILD pkgver is $P, Cargo.toml is $V"; FAIL=1; }
         [ "$S" = "$V" ] || { echo "$pkg/.SRCINFO pkgver is $S, Cargo.toml is $V"; FAIL=1; }
-        if grep "^${TAB}source" "$D/.SRCINFO" | grep -qv "/v$V[/.]"; then
+        if grep "^${TAB}source" "$D/.SRCINFO" | grep -qv "/v${V}[/.]"; then
             echo "$pkg/.SRCINFO sources do not point at v$V"
             FAIL=1
         fi
